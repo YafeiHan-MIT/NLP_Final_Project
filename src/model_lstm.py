@@ -113,14 +113,15 @@ class LSTM(nn.Module):
         self.h_t = h_t #self.h_t: seq_len * num_ques * hidden_dim
         self.h_b = h_b #self.h_b: seq_len * num_ques * hidden_dim
         
-        #if args.average:
-        # Average over sequence length, ignoring paddings
-        h_t_final = self.average_without_padding(h_t, titles) #h_t: num_ques * hidden_dim
-        h_b_final = self.average_without_padding(h_b, bodies) #h_b: num_ques * hidden_dim
+        if self.args.average: # Average over sequence length, ignoring paddings
+            h_t_final = self.average_without_padding(h_t, titles) #h_t: num_ques * hidden_dim
+            h_b_final = self.average_without_padding(h_b, bodies) #h_b: num_ques * hidden_dim
             #say("h_avg_title dtype: {}\n".format(ht.dtype))
-#        else:
-#            h_t_final = h_t[-1]  ## get the hidden output at the last position 
-#            h_b_final = h_b[-1]  
+        else:#last pooling 
+            last_ind_t = ((titles<>0)*1.0).sum(axis=0)-1
+            last_ind_b = ((bodies<>0)*1.0).sum(axis=0)-1
+            h_t_final = h_t[last_ind_t]  ## get the hidden output at the last position for titles 
+            h_b_final = h_b[last_ind_b]## get the hidden output at the last position for bodies 
         #Pool title and body hidden tensor together 
         h_final = (h_t_final+h_b_final)*0.5 # num_ques * hidden_dim
         #h_final = apply_dropout(h_final, dropout) ???

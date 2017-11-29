@@ -120,16 +120,16 @@ argparser.add_argument("--load_pretrain",
     )
 argparser.add_argument("--average",
         type = int,
-        default = 0
+        default = 1
     )
 argparser.add_argument("--save_model",
         type = str,
-        default = "result"
+        default = "result_lstm"
     )
 
 argparser.add_argument("--if_save",
         type = int,
-        default = 0
+        default = 1
     )
 
 argparser.add_argument("--margin",

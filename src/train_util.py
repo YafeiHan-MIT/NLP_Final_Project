@@ -81,14 +81,14 @@ def run_epoch(ids_corpus, train, dev, test, model, optimizer, args):
     #set model to training mode 
     model.train() #set model to train mode 
     train_batches = create_batches(ids_corpus, train, args.batch_size, padding_id=0, perm=None, pad_left=False)
-    N=3 ##for testing 
-    #N = len(train_batches)
+    #N=3 ##for testing 
+    N = len(train_batches)
     train_loss = 0.0
     train_cost = 0.0     
     for i in xrange(N):
         print "training batch",str(i)
         batch=train_batches[i]
-        print "batch title..", batch[0][0]
+        #print "batch title..", batch[0][0]
         h_final=model(batch,True)
         loss = max_margin_loss(h_final,batch,args.margin)
         cost = loss + model.get_l2_reg()
@@ -104,12 +104,9 @@ def run_epoch(ids_corpus, train, dev, test, model, optimizer, args):
         
         train_loss += loss
         train_cost += cost        
-#        if i%10 == 0:
-#            say("\r{}/{}".format(i,N))
-#            print "  loss, cost:", (train_loss/(i+1)).data[0], (train_cost/(i+1)).data[0]
-        say("\r{}/{}".format(i,N))
-        print "  loss, cost:", (train_loss/(i+1)).data[0], (train_cost/(i+1)).data[0]
-        
+        if i%10 == 0:
+            say("\r{}/{}".format(i,N))
+            print "  loss, cost:", (train_loss/(i+1)).data[0], (train_cost/(i+1)).data[0]
         dev_eva = None
         test_eva = None
         if i == N-1: #last batch 

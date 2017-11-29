@@ -1,0 +1,4 @@
+cd "/Users/yafeihan/Dropbox (MIT)/Courses_MIT/6.864_NLP/NLP_Final_Project/src"
+
+python main.py --model_name=lstm --hidden_dim=200 --average=1 --batch_size=40 --learning_rate=0.001 --l2_reg=1e-5  --max_epoch=50 --if_save=1
+
