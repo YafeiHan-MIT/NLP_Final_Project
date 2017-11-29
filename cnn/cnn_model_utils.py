@@ -118,7 +118,7 @@ def read_corpus(path):
             title = title.strip().split()
             body = body.strip().split()
             raw_corpus[id] = [title, body]
-    print "{} empty titles ignored.\n".format(empty_cnt)
+    print("{} empty titles ignored.\n".format(empty_cnt))
     return raw_corpus
 
 

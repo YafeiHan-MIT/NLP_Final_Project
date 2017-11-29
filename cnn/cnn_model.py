@@ -5,7 +5,7 @@ import cnn_model_utils as util
 from cnn_model_utils import say
 from evaluation import Evaluation
 from prettytable import PrettyTable
-from torch.autograd import Variable, Function
+from torch.autograd import Variable
 import torch.nn as nn
 import torch.nn.functional as F
 import torch
@@ -14,20 +14,15 @@ import torch
 def normalize_2d(x, eps=1e-8):
     # x is batch*d
     # l2 is batch*1
-    l2 = x.norm(2, axis=1).dimshuffle((0, 'x'))
+    l2 = x.norm(2, 1).view(x.size(0), 1)
     return x / (l2 + eps)
+
 
 def normalize_3d(x, eps=1e-8):
     # x is len*batch*d
     # l2 is len*batch*1
-    l2 = x.norm(2,axis=2).dimshuffle((0,1,'x'))
-    return x/(l2+eps)
-
-
-class LossFunction(Function):
-
-    def forward(self, outputs):
-        pass
+    l2 = x.norm(2, 2).view(x.size(0), x.size(1), 1)
+    return x / (l2 + eps)
 
 
 class CNN(nn.Module):
@@ -35,7 +30,7 @@ class CNN(nn.Module):
         super(CNN, self).__init__()
 
         self.conv = nn.Conv1d(input_size, hidden_size, filter_width)
-        self.pool = nn.AvgPool1d(filter_width)
+        self.pool = nn.MaxPool1d(filter_width)
         self.out = nn.Linear(hidden_size, output_size)
 
     def forward(self, xt, xb):
@@ -43,16 +38,13 @@ class CNN(nn.Module):
         xt = xt.transpose(0, 1).transpose(1, 2)
         xb = xb.transpose(0, 1).transpose(1, 2)
 
-        xt = self.pool(F.tanh(self.conv(xt)))
-        xb = self.pool(F.tanh(self.conv(xb)))
+        xt = F.tanh(self.conv(xt))
+        xb = F.tanh(self.conv(xb))
 
-        xt = normalize_3d(xt)
-        xb = normalize_3d(xb)
+        xt = F.tanh(self.pool(xt))
+        xb = F.tanh(self.pool(xb))
 
-        print xt.data.size()
-        print xb.data.size()
-
-        return normalize_2d(xt + xb)
+        return normalize_2d(xt.mean(2) + xb.mean(2))
 
 
 class Model:
@@ -66,17 +58,13 @@ class Model:
     def train(self, cnn, criterion, optimizer, train_batches, dev=None, test=None):
         result_table = PrettyTable(["Epoch", "dev MAP", "dev MRR", "dev P@1", "dev P@5"] +
                                    ["tst MAP", "tst MRR", "tst P@1", "tst P@5"])
-
         unchanged = 0
         best_dev = -1
         dev_MAP = dev_MRR = dev_P1 = dev_P5 = 0
         test_MAP = test_MRR = test_P1 = test_P5 = 0
-        start_time = 0
         for epoch in xrange(self.max_epoch):
             unchanged += 1
             if unchanged > 15: break
-
-            start_time = time.time()
 
             N = len(train_batches)
 
@@ -86,6 +74,7 @@ class Model:
             for i in xrange(N):
                 # get current batch
                 idts, idbs, idps = train_batches[i]
+                # get embedding for every word for titles and bodies and then reshape
                 xt = self.embedding.forward(idts.ravel())
                 xt = xt.reshape((idts.shape[0], idts.shape[1], self.embedding.n_d))
                 xb = self.embedding.forward(idbs.ravel())
@@ -94,24 +83,47 @@ class Model:
                 titles = Variable(torch.from_numpy(xt)).float()
                 bodies = Variable(torch.from_numpy(xb)).float()
 
+                if args.cuda:
+                    titles = titles.cuda()
+                    bodies = bodies.cuda()
+
                 optimizer.zero_grad()
                 outputs = cnn(titles, bodies)
-                xp = outputs[idps.ravel()]
-                xp = xp.reshape((idps.shape[0], idps.shape[1], self.embedding.n_d))
 
-                loss = criterion(outputs)
+                idps_tensor = Variable(torch.from_numpy(idps.ravel()).long())
+                if args.cuda:
+                    idps_tensor = idps_tensor.cuda()
+                xp = torch.index_select(outputs, 0, idps_tensor)
+                # number of source vec * 22 * hidden layer size
+                # 22 is from 1 source vec, 1 pos vec, 20 neg vec
+                xp = xp.view(idps.shape[0], idps.shape[1], self.embedding.n_d)
+
+                query_vec = xp[:, 0, :].contiguous()
+                pos_scores = F.cosine_similarity(query_vec, xp[:, 1, :]).view(query_vec.size(0), 1)
+                neg_scores = F.cosine_similarity(query_vec.view(xp.size(0), 1, xp.size(2)), xp[:, 2:, :], 2)
+                # x_scores = torch.cat([pos_scores, neg_scores], 1)
+                # y_targets = torch.zeros(x_scores.size(0)).type(torch.LongTensor)
+                #
+                # if args.cuda:
+                #     y_targets = Variable(y_targets).cuda()
+                # else:
+                #     y_targets = Variable(y_targets)
+                #
+                # loss = criterion(x_scores, y_targets)
+                loss = self.max_margin_loss(pos_scores, neg_scores)
                 loss.backward()
                 optimizer.step()
                 train_loss += loss
+                train_cost += (loss + sum([x.norm(2) for x in cnn.parameters()]))
 
                 if i % 10 == 0:
                     say("\r{}/{}".format(i, N))
 
                 if i == N - 1:
                     if dev is not None:
-                        dev_MAP, dev_MRR, dev_P1, dev_P5 = self.evaluate(dev, eval_func)
+                        dev_MAP, dev_MRR, dev_P1, dev_P5 = self.evaluate(args, dev, cnn)
                     if test is not None:
-                        test_MAP, test_MRR, test_P1, test_P5 = self.evaluate(test, eval_func)
+                        test_MAP, test_MRR, test_P1, test_P5 = self.evaluate(args, test, cnn)
 
                     if dev_MRR > best_dev:
                         unchanged = 0
@@ -123,22 +135,35 @@ class Model:
                         )
 
                     say("\r\n\n")
-                    say(("Epoch {}\tcost={:.3f}\tloss={:.3f}" \
-                         + "\tMRR={:.2f},{:.2f}\t[{:.3f}m]\n").format(
+                    say("Epoch {}\tcost={}\tloss={}\tMRR={},{}\n".format(
                         epoch,
-                        train_cost / (i + 1),
-                        train_loss / (i + 1),
+                        train_cost.data / (i + 1),
+                        train_loss.data / (i + 1),
                         dev_MRR,
-                        best_dev,
-                        (time.time() - start_time) / 60.0
+                        best_dev
                     ))
                     say("{}".format(result_table))
                     say("\n")
 
-    def evaluate(self, data, eval_func):
+    def evaluate(self, args, data, cnn):
         res = []
         for idts, idbs, labels in data:
-            scores = eval_func(idts, idbs)
+            xt = self.embedding.forward(idts.ravel())
+            xt = xt.reshape((idts.shape[0], idts.shape[1], self.embedding.n_d))
+            xb = self.embedding.forward(idbs.ravel())
+            xb = xb.reshape((idbs.shape[0], idbs.shape[1], self.embedding.n_d))
+            titles = Variable(torch.from_numpy(xt)).float()
+            bodies = Variable(torch.from_numpy(xb)).float()
+            if args.cuda:
+                titles = titles.cuda()
+                bodies = bodies.cuda()
+            outputs = cnn(titles, bodies)
+            pos = outputs[0].view(1, outputs[0].size(0))
+            scores = torch.mm(pos, outputs[1:].transpose(1,0)).squeeze()
+            if args.cuda:
+                scores = scores.data.cpu().numpy()
+            else:
+                scores = scores.data.numpy()
             assert len(scores) == len(labels)
             ranks = (-scores).argsort()
             ranked_labels = labels[ranks]
@@ -150,6 +175,15 @@ class Model:
         P5 = e.Precision(5) * 100
         return MAP, MRR, P1, P5
 
+    def max_margin_loss(self, pos_scores, neg_scores, margin=0.1):
+        neg_scores_max, index_max = neg_scores.max(
+            dim=1)  # max over all 20 negative samples  # 1-d Tensor: num source queries
+        diff = neg_scores_max - pos_scores + margin  # 1-d tensor  length = num of source queries
+        # average loss over all source queries in a batch
+        loss = ((diff > 0).float() * diff).mean()  ##
+        self.loss = loss  # Variable for back-propagation
+        return loss
+
 
 def main(args):
     raw_corpus = util.read_corpus(args.corpus)
@@ -157,12 +191,13 @@ def main(args):
     ids_corpus = util.map_corpus(raw_corpus, embedding)
     padding_id = embedding.vocab_id_map["<padding>"]
 
-    # if args.dev:
-    #     dev = util.read_annotations(args.dev, K_neg=-1, prune_pos_cnt=-1)
-    #     dev = util.create_eval_batches(ids_corpus, dev, padding_id, pad_left=not args.average)
-    # if args.test:
-    #     test = util.read_annotations(args.test, K_neg=-1, prune_pos_cnt=-1)
-    #     test = util.create_eval_batches(ids_corpus, test, padding_id, pad_left=not args.average)
+    dev, test = None, None
+    if args.dev:
+        dev = util.read_annotations(args.dev, K_neg=-1, prune_pos_cnt=-1)
+        dev = util.create_eval_batches(ids_corpus, dev, padding_id, pad_left=not args.average)
+    if args.test:
+        test = util.read_annotations(args.test, K_neg=-1, prune_pos_cnt=-1)
+        test = util.create_eval_batches(ids_corpus, test, padding_id, pad_left=not args.average)
 
     if args.train:
         train = util.read_annotations(args.train)
@@ -175,8 +210,11 @@ def main(args):
         filter_width = 3
         cnn = CNN(input_size, hidden_size, output_size, filter_width)
         criterion = nn.MultiMarginLoss(p=1, margin=0.1, size_average=True)
+        if args.cuda:
+            cnn = cnn.cuda()
+            criterion = criterion.cuda()
         optimizer = torch.optim.Adam(cnn.parameters(), lr=0.01)
-        model.train(cnn, criterion, optimizer, train_batches)
+        model.train(cnn, criterion, optimizer, train_batches, dev, test)
 
 if __name__ == "__main__":
     argparser = argparse.ArgumentParser(sys.argv[0])
@@ -207,7 +245,10 @@ if __name__ == "__main__":
                            type=int,
                            default=40
                            )
+    argparser.add_argument("--cuda",
+                           type=bool,
+                           default=False)
 
     args = argparser.parse_args()
-    print args
+    print(args)
     main(args)
