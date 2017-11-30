@@ -86,11 +86,10 @@ def run_epoch(ids_corpus, train, dev, test, model, optimizer, args):
     train_loss = 0.0
     train_cost = 0.0     
     for i in xrange(N):
-        print "training batch",str(i)
         batch=train_batches[i]
         #print "batch title..", batch[0][0]
         h_final=model(batch,True)
-        loss = max_margin_loss(h_final,batch,args.margin)
+        loss = max_margin_loss(args,h_final,batch,args.margin)
         cost = loss + model.get_l2_reg()
         
         ##check params updates  

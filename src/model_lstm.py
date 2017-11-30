@@ -53,6 +53,8 @@ class LSTM(nn.Module):
         self.args = args
         ##Define layers in the nnet
         self.embedding = nn.Embedding(self.vocab_size, self.embedding_dim, self.padding_idx)
+        if args.cuda:
+            self.embedding = self.embedding.cuda()
         self.embedding.weight.data = torch.from_numpy(embeddings) #fixed embedding 
         self.lstm = nn.LSTM(
                             input_size = self.embedding_dim, 
@@ -72,8 +74,12 @@ class LSTM(nn.Module):
             h_0 (num_layers * num_directions=1, batch, hidden_dim): tensor containing the initial hidden state for each element in the batch.
             c_0 (num_layers * num_directions=1, batch, hidden_dim): tensor containing the initial cell state for each element in the batch.
         '''
-        return (autograd.Variable(torch.zeros(self.hidden_layers, num_ques, self.hidden_dim),requires_grad = True),
-                autograd.Variable(torch.zeros(self.hidden_layers, num_ques, self.hidden_dim),requires_grad = True))
+        t = autograd.Variable(torch.zeros(self.hidden_layers, num_ques, self.hidden_dim),requires_grad = True)
+        b = autograd.Variable(torch.zeros(self.hidden_layers, num_ques, self.hidden_dim),requires_grad = True)
+        if self.args.cuda:
+            t = t.cuda()
+            b = b.cuda()
+        return (t, b)
 
     def forward(self, batch, if_training):
         '''
@@ -94,10 +100,17 @@ class LSTM(nn.Module):
         seq_len_b, num_ques= bodies.shape
         self.hcn_t = self.init_hidden(num_ques) #(h_0, c_0) for titles' initial hidden states
         self.hcn_b = self.init_hidden(num_ques) #(h_0, c_0) for bodies' initial hidden states
+
+        titles = Variable(torch.from_numpy(titles).long(), requires_grad=False)
+        bodies = Variable(torch.from_numpy(bodies).long(), requires_grad=False)
+
+        if self.args.cuda:
+            titles = titles.cuda()
+            bodies = bodies.cuda()
         
         ## embedding layer: word indices => embeddings 
-        embeds_titles = self.embedding(Variable(torch.from_numpy(titles).long(),requires_grad=False)) #seq_len_title * num_ques * embed_dim
-        embeds_bodies = self.embedding(Variable(torch.from_numpy(bodies).long(),requires_grad=False)) #seq_len_body * num_ques * embed_dim
+        embeds_titles = self.embedding(titles) #seq_len_title * num_ques * embed_dim
+        embeds_bodies = self.embedding(bodies) #seq_len_body * num_ques * embed_dim
         
         ## lstm layer: word embedding (200) & h_(t-1) (hidden_dim) => h_t (hidden_dim)
         h_t, self.hcn_t = self.lstm(embeds_titles, self.hcn_t)
@@ -139,11 +152,15 @@ class LSTM(nn.Module):
         Output: 
             avg: num_ques * hidden_dim
         '''
-        mask = (ids<>self.padding_idx)*1.0
-        seq_len, num_ques = mask.shape
-        mask_tensor = torch.from_numpy(mask).float().view((seq_len, num_ques,-1)) #mask_tensor: seq_len * batch * 1
+        mask = (ids<>self.padding_idx) * 1
+        seq_len, num_ques = mask.size()
+        mask_tensor = mask.data.float().view((seq_len, num_ques,-1)) #mask_tensor: seq_len * batch * 1
         mask_tensor = mask_tensor.expand((seq_len, num_ques,self.hidden_dim)) #repeat the last dim to match hidden layer dimension
         mask_variable = Variable(mask_tensor,requires_grad = True)
+
+        if self.args.cuda:
+            mask_variable = mask_variable.cuda()
+
         avg = (x*mask_variable).sum(dim=0)/(mask_variable.sum(dim=0)+eps)
         return avg
     
@@ -194,14 +211,18 @@ class LSTM(nn.Module):
         return l2_reg
     
 
-def max_margin_loss(h_final,batch,margin):
+def max_margin_loss(args,h_final,batch,margin):
     '''
     Post process h_final: Compute average max margin loss for a batch 
     '''
     titles,bodies,triples = batch
     hidden_dim = h_final.size(1)
+
+    idps_tensor = Variable(torch.from_numpy(triples.ravel()).long())
+    if args.cuda:
+        idps_tensor = idps_tensor.cuda()
     
-    queSet_vectors = h_final[torch.from_numpy(triples.ravel()).long()] #flatten triples question indices to a 1-D Tensor of len = source queries *22
+    queSet_vectors = torch.index_select(h_final, 0, idps_tensor) #flatten triples question indices to a 1-D Tensor of len = source queries *22
     queSet_vectors = queSet_vectors.view(triples.shape[0],triples.shape[1],hidden_dim) #num of query * 22 * hidden_dim
     
     # num of query * hidden_dim
