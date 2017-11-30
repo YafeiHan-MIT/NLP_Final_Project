@@ -21,6 +21,7 @@ import torch.nn.functional as F
 from optparse import OptionParser
 from src.init_util import *
 from src.data_util import *
+import src.evaluation 
 
 def get_model(embeddings, ids_corpus, args):
     '''
@@ -166,7 +167,7 @@ class LSTM(nn.Module):
             ranks = np.array((-scores.data).tolist()).argsort() #sort by score 
             ranked_labels = labels[ranks]
             res.append(ranked_labels) ##a list of labels for the ranked retrievals  
-        e = Evaluation(res)
+        e = src.evaluation.Evaluation(res)
         MAP = e.MAP()*100
         MRR = e.MRR()*100
         P1 = e.Precision_at_R(1)*100
@@ -255,67 +256,7 @@ def normalize_2d(x, eps=1e-8):
     l2 = l2.view(len(l2),-1) #change l2's dimension to: num_ques * 1
     return x/(l2+eps)  
 
-class Evaluation():
-    def __init__(self,data):
-        self.data = data
-    
-    def Precision_at_R(self,precision_at):
-        precision_all = []
-        for item in self.data:
-            item_sel = item[:precision_at]
-            count_pos = 0.0
-            if len(item_sel)>0:
-                for label in item_sel:
-                    if label == 1:
-                        count_pos += 1
-                precision_all.append(count_pos/len(item_sel))
-            else:
-                precision_all.append(0.0)
-        return sum(precision_all)/len(precision_all)
-                
-    def MAP(self):
-        '''
-        Mean Average Precision (MAP)
-        
-        Input: 
-            self.data: a list of ranked retrievals' labels(1=relevant,0=not rel)
-        Output: 
-            float MAP
-        '''
-        AP = [] #list of Average Precision(AP) for all queries in self.data
-        for item in self.data: #examine each query
-            count_pos = 0.0 ##accumulative count of relevant documents 
-            Pk = [] #precision of the first (k+1) retrievals for a single query
-            for k,label in enumerate(item): #k: rank of retrieved doc, label: 1 if relevant, 0 not relevant
-                if label == 1:
-                    count_pos += 1.0
-                Pk.append(count_pos/(k+1)) #precision for the first (k+1) retrievals
-            if len(Pk)>0: 
-                AP.append(sum(Pk)/len(Pk))
-            else:
-                AP.append(0.0)
-        return sum(AP)/len(AP) #average over all queries
-    
-    def MRR(self):
-        '''
-        Mean reciprocal rank (MRR)
-        MRR = 1/|Q| * sum_j(1/rank_j), where 
-            Q: set of all queries,|Q| is the number of queries 
-            rank_j: the rank of the first relevant document for query j in Q
-            
-        '''
-        list_RR = [] #list of reciprocal rank for all queries
-        for item in self.data:
-            if len(item)==0: #no retrieval for current query
-                list_RR.append(0.0)
-            else:
-                for i,label in enumerate(item):
-                    if label == 1: #first encountering a relevant document 
-                        list_RR.append(1.0/(i+1))  #record 1/rank 
-                        break
-                    if i==len(item)-1:#reach the end but not find relevant document
-                        list_RR.append(0.0)  
-        return sum(list_RR)/len(list_RR) if len(list_RR) > 0 else 0.0
+
 
 
 
