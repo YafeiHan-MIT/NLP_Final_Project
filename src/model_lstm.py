@@ -172,13 +172,17 @@ class LSTM(nn.Module):
         Output: 
             last hidden output: num_ques * hidden_dim       
         '''
-        seq_len, num_ques = ids.shape
-        mask = torch.zeros(seq_len, num_ques,self.hidden_dim)
+        seq_len, num_ques = ids.data.size()
+        mask_tensor = torch.zeros(seq_len, num_ques,self.hidden_dim)
         #find seq last position
-        last_ind = (ids<>0).sum(axis=0)-1 #1D tensor: index of the seq last position
+        last_ind = (ids.data<>0).sum(dim=0)-1 #1D tensor: index of the seq last position
         for i in range(num_ques):
-            mask[last_ind[i],i,:]=1 #put 1 to the last position of the sequence in mask. 
-        mask_variable = Variable(mask,requires_grad = True) #seq_len, num_ques, hidden_dim
+            mask_tensor[last_ind[i],i,:]=1 #put 1 to the last position of the sequence in mask. 
+        mask_variable = Variable(mask_tensor,requires_grad = True) #seq_len, num_ques, hidden_dim
+        
+        if self.args.cuda:
+            mask_variable = mask_variable.cuda()
+            
         return (x*mask_variable).sum(dim=0) ##num_ques by hidden_dim
 
     def evaluate(self, data):
