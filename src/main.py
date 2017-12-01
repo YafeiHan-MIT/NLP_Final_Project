@@ -134,16 +134,16 @@ argparser.add_argument("--margin",
         type = float,
         default = 0.2
     )
-<<<<<<< HEAD
+
         
 argparser.add_argument("--seed",
         type = int,
         default = 7
-=======
+    )
+
 argparser.add_argument("--cuda",
         type = bool,
         default = False
->>>>>>> 0ccb889ca87a519b38df26a14b413ee50929620f
     )
 
 args = argparser.parse_args()
