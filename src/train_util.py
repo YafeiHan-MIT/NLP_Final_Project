@@ -59,8 +59,8 @@ def train_model(model, train, dev, test, ids_corpus):
             type((time.time()-start_time)/60.0)
             say(( "Epoch {}\tcost={:.3f}\tloss={:.3f}\tdev_MRR={:.2f}\tTime:{:.3f}m\n").format(
                     epoch,
-                    train_cost.data[0],
-                    train_loss.data[0],
+                    train_cost,
+                    train_loss,
                     dev_MRR,
                     (time.time()-start_time)/60.0
             ))
@@ -101,11 +101,11 @@ def run_epoch(ids_corpus, train, dev, test, model, optimizer, args):
         loss.backward()  #back propagation, compute gradient 
         optimizer.step() #update parameters 
         
-        train_loss += loss
-        train_cost += cost        
+        train_loss += loss.data
+        train_cost += cost.data
         if i%10 == 0:
             say("\r{}/{}".format(i,N))
-            print "  loss, cost:", (train_loss/(i+1)).data[0], (train_cost/(i+1)).data[0]
+            print "  loss, cost:", (train_loss/(i+1))[0], (train_cost/(i+1))[0]
         dev_eva = None
         test_eva = None
         if i == N-1: #last batch 
@@ -115,7 +115,7 @@ def run_epoch(ids_corpus, train, dev, test, model, optimizer, args):
             if test is not None:
                 #MAP_test, MRR_test, P1_test, P5_test = model.evaluate(test)   
                 test_eva = model.evaluate(test)
-    return train_loss/(i+1), train_cost/(i+1), dev_eva, test_eva
+    return (train_loss/(i+1))[0], (train_cost/(i+1))[0], dev_eva, test_eva
 
         
 #embedding_path='data/vector/vectors_pruned.200.txt.gz'

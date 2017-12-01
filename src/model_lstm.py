@@ -183,7 +183,7 @@ class LSTM(nn.Module):
             assert len(scores) == len(labels) #20
             ranks = np.array((-scores.data).tolist()).argsort() #sort by score 
             ranked_labels = labels[ranks]
-            res.append(ranked_labels) ##a list of labels for the ranked retrievals  
+            res.append(ranked_labels.tolist()) ##a list of labels for the ranked retrievals
         e = src.evaluation.Evaluation(res)
         MAP = e.MAP()*100
         MRR = e.MRR()*100
