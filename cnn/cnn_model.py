@@ -44,6 +44,9 @@ class CNN(nn.Module):
         xt = F.tanh(self.pool(xt))
         xb = F.tanh(self.pool(xb))
 
+        xt = normalize_3d(xt)
+        xb = normalize_3d(xb)
+
         return normalize_2d(xt.mean(2) + xb.mean(2))
 
 
@@ -114,7 +117,7 @@ class Model:
                 loss.backward()
                 optimizer.step()
                 train_loss += loss
-                train_cost += (loss + sum([x.norm(2) for x in cnn.parameters()]))
+                train_cost += (loss + args.l2_reg * sum([x.norm(2) for x in cnn.parameters()]))
 
                 if i % 10 == 0:
                     say("\r{}/{}".format(i, N))
@@ -248,6 +251,10 @@ if __name__ == "__main__":
     argparser.add_argument("--cuda",
                            type=bool,
                            default=False)
+    argparser.add_argument("--l2_reg",
+                           type=float,
+                           default=1e-5
+                           )
 
     args = argparser.parse_args()
     print(args)
