@@ -118,11 +118,9 @@ class LSTM(nn.Module):
             h_t_final = self.average_without_padding(h_t, titles) #h_t: num_ques * hidden_dim
             h_b_final = self.average_without_padding(h_b, bodies) #h_b: num_ques * hidden_dim
             #say("h_avg_title dtype: {}\n".format(ht.dtype))
-        else:#last pooling 
-            last_ind_t = ((titles<>0)*1.0).sum(axis=0)-1
-            last_ind_b = ((bodies<>0)*1.0).sum(axis=0)-1
-            h_t_final = h_t[last_ind_t]  ## get the hidden output at the last position for titles 
-            h_b_final = h_b[last_ind_b]## get the hidden output at the last position for bodies 
+        else:  #last pooling 
+            h_t_final = self.last_without_padding(h_t,titles)
+            h_b_final = self.last_without_padding(h_b,bodies)
         #Pool title and body hidden tensor together 
         h_final = (h_t_final+h_b_final)*0.5 # num_ques * hidden_dim
         #h_final = apply_dropout(h_final, dropout) ???
@@ -132,7 +130,7 @@ class LSTM(nn.Module):
         
     def average_without_padding(self, x, ids,eps=1e-8):
         '''
-        average hidden output over seq length ignoaring padding 
+        average hidden output over seq length ignoring padding 
         
         Input: 
             x: Variable that contains hidden layer output tensor; size = seq_len * num_ques * hidden_dim
@@ -147,6 +145,25 @@ class LSTM(nn.Module):
         avg = (x*mask_variable).sum(dim=0)/(mask_variable.sum(dim=0)+eps)
         return avg
     
+    def last_without_padding(self,x,ids):
+        '''
+        Last hidden output of a sequence ignoring padding 
+        
+        Input: 
+            x: Variable that contains hidden layer output tensor; size = seq_len * num_ques * hidden_dim
+            ids: actual titles or bodies word indices padded with 0 on the right(seq_len * num_ques) 
+        Output: 
+            last hidden output: num_ques * hidden_dim       
+        '''
+        seq_len, num_ques = ids.shape
+        mask = torch.zeros(seq_len, num_ques,self.hidden_dim)
+        #find seq last position
+        last_ind = (ids<>0).sum(axis=0)-1 #1D tensor: index of the seq last position
+        for i in range(num_ques):
+            mask[last_ind[i],i,:]=1 #put 1 to the last position of the sequence in mask. 
+        mask_variable = Variable(mask,requires_grad = True) #seq_len, num_ques, hidden_dim
+        return (x*mask_variable).sum(dim=0) ##num_ques by hidden_dim
+
     def evaluate(self, data):
         '''
         Input: 
@@ -219,11 +236,6 @@ def max_margin_loss(h_final,batch,margin):
     loss = ((diff>0).float()*diff).mean() #average loss over all source queries in a batch 
     return loss
 
-### use avg margin loss       
-#        x_scores = torch.cat((pos_scores.view(pos_scores.size()[0],-1),neg_scores),dim=1)
-#        y_scores = Variable(torch.LongTensor(x_scores.size()[0]).zero_())
-#        loss=self.crit(x_scores,y_scores)
-#        self.loss = loss
 
 def cosSim(h_final):
     '''

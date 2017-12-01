@@ -23,8 +23,6 @@ from src.model_lstm import *
 from src.init_util import *
 from src.train_util import *
 
-torch.manual_seed(7)
-
 #Build a argument parser: argparser
 argparser = argparse.ArgumentParser(description="Neural network for QA")
 argparser.add_argument("--corpus",
@@ -120,7 +118,7 @@ argparser.add_argument("--load_pretrain",
     )
 argparser.add_argument("--average",
         type = int,
-        default = 1
+        default = 0
     )
 argparser.add_argument("--save_model",
         type = str,
@@ -136,13 +134,17 @@ argparser.add_argument("--margin",
         type = float,
         default = 0.2
     )
+        
+argparser.add_argument("--seed",
+        type = int,
+        default = 7
+    )
 
 args = argparser.parse_args()
 print args
 print ""
 
-#args.config = 'h'+str(args.hidden_size)+'lr'+str(args.lr)+'reg'+str(args.weight_decay)
-#args.save_path = os.path.join('result',args.config)
+torch.manual_seed(args.seed)
 
 if not os.path.exists(args.save_model):
     os.makedirs(args.save_model)

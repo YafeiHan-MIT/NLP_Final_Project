@@ -119,11 +119,11 @@ vocab = vec.get_feature_names()
 print 'size of vocab:', len(vocab)
 
 ##Evaluate performance based on ranking with cosine similarity
-print 'dev set:'
+print '\ndev set:'
 print 'MAP, MRR, P@1, P@5\n'
 ev_dev = evaluate_by_cos_similarity('data/Android/dev.pos.txt','data/Android/dev.neg.txt',tfidf,id_to_index)
 
-print 'test set:'
+print '\ntest set:'
 print 'MAP, MRR, P@1, P@5\n'
 ev_test = evaluate_by_cos_similarity('data/Android/test.pos.txt','data/Android/test.neg.txt',tfidf,id_to_index)
 
