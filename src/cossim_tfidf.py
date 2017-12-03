@@ -15,53 +15,10 @@ os.chdir(dirname(dirname(realpath(__file__)))) #u'/Users/yafeihan/Dropbox (MIT)/
 import gzip
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
-import src.evaluation
+from src.evaluation import Evaluation 
+#from src.data_util import *
+from src.data_util_Android import *
 
-def say(s, stream=sys.stdout):
-    stream.write(s)
-    stream.flush()
-
-def read_corpus_Android(path):
-    '''
-    Return a raw corpus dictionary: {id:(title,body)}.
-    
-    Input: path to the corpus text file
-            text format: id, title and body sep by '\t'
-    
-    Output: {id:str: (title:list, body:list)}
-
-    '''
-    raw_corpus={}
-    empty_cnt = 0
-    fopen = gzip.open if path.endswith(".gz") else open
-    with fopen(path) as f:
-        for line in f:
-            id,title,body = line.split('\t')
-            if len(title)==0:
-                print "empty title: id=",id
-                empty_cnt+=1
-                continue
-            raw_corpus[id]=(title+' '+body).strip()
-    print empty_cnt,"empty title records are ignored.\n"
-    id_to_index = dict()
-    text_list = []
-    i=0
-    for key in raw_corpus:
-        id_to_index[key]=i
-        text_list.append(raw_corpus[key])
-        i+=1
-    return raw_corpus,text_list,id_to_index
-
-def read_labeled_pairs(path):
-    pairs=dict()
-    with open(path) as f:
-        for line in f:
-            pid,qid=line.split()
-            if pid not in pairs:
-                pairs[pid]=[qid]
-            else:
-                pairs[pid].append(qid)
-    return pairs
 
 def cos_similarity(tfidf,id1,id2,id_to_index):
     '''
@@ -92,23 +49,23 @@ def rank(pos_pairs,neg_pairs,tfidf,id_to_index):
         ranked_scores[p]=-sorted_scores
     return ranked_labels,ranked_scores
         
-
-def evaluate(labels_ranked):
-    '''
-    data is a list of golden labels ranked by scores. 
-        e.g. [[1,0],[1,1,1,0],[0,1,0]]
-    '''
-    e=src.evaluation.Evaluation(labels_ranked)
-    return e.MAP(),e.MRR(), e.Precision_at_R(1), e.Precision_at_R(5)
+#def evaluate(labels_ranked):
+#    '''
+#    data is a list of golden labels ranked by scores. 
+#        e.g. [[1,0],[1,1,1,0],[0,1,0]]
+#    '''
+#    e=Evaluation(labels_ranked)
+#    return e.MAP(),e.MRR(), e.Precision_at_R(1), e.Precision_at_R(5)
 
 def evaluate_by_cos_similarity(path_pos_pairs,path_neg_pairs,tfidf,id_to_index):
     pos_pairs=read_labeled_pairs(path_pos_pairs)    
     neg_pairs=read_labeled_pairs(path_neg_pairs)
     ranked_labels,ranked_scores=rank(pos_pairs,neg_pairs,tfidf,id_to_index)           
     ranked = [list(ranked_labels[key]) for key in ranked_labels]
-    ev = evaluate(ranked)
-    say("{:.3f},{:.3f},{:.3f},{:.3f}".format(ev[0],ev[1],ev[2],ev[3]))
-    return ev
+    e=Evaluation(ranked)
+    say("{:.3f},{:.3f},{:.3f},{:.3f}".format(e.MAP(),e.MRR(), e.Precision_at_R(1), e.Precision_at_R(5)))
+    return e.MAP(),e.MRR(), e.Precision_at_R(1), e.Precision_at_R(5)
+
 
 ##Obtain tfidf for entire Android corpus
 corpus_path = 'data/Android/corpus.tsv.gz'

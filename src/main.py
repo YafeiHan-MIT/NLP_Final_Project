@@ -146,6 +146,12 @@ argparser.add_argument("--cuda",
         default = False
     )
 
+argparser.add_argument("--pad_left",
+        type = bool,
+        default = False
+    )
+
+
 args = argparser.parse_args()
 print args
 print ""

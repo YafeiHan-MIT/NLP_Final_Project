@@ -45,8 +45,8 @@ def read_corpus(path):
                 print "empty title: id=",id
                 empty_cnt+=1
                 continue
-            title = title.strip().split()
-            body = body.strip().split()
+            title = title.strip().lower().split()
+            body = body.strip().lower().split()
             raw_corpus[id]=(title,body)
     say("{} empty title records are ignored.\n".format(empty_cnt))
     return raw_corpus
@@ -155,7 +155,7 @@ def read_annotations(path, num_neg=20):
     return lst
 
 
-def create_batches(ids_corpus, data, batch_size, padding_id, perm=None, pad_left=False):
+def create_batches(ids_corpus, data, batch_size, padding_id=0, perm=None, pad_left=False):
     '''
     Input: 
         ids_corpus: question content dictionary {pid:(title,body)}   
@@ -221,8 +221,36 @@ def create_batches(ids_corpus, data, batch_size, padding_id, perm=None, pad_left
             cnt = 0
     return batches 
 
+def create_batches_target(src_batches, tar_corpus_ids):
+    '''
+    Input:
+        src_batches: source domain training batches
+        tar_corpus_ids:target domain corpus (using word indices)
+            
+    Output:
+        target batches: [(titlesPadded,bodiesPadded),(titlesPadded,bodiesPadded),...]       
+    '''
+    
+    tar_batches=[]
+    for i in range(len(src_batches)):
+        ##max title length and body length should match source batch 
+        max_title_len, num_ques=src_batches[i][0].shape
+        max_body_len, num_ques=src_batches[i][1].shape
+        
+        #randomly draw same number of questions from target domain corpus 
+        sel_tar_ids=np.random.choice(tar_corpus_ids.keys(),num_ques) 
+        titles = [tar_corpus_ids[key][0] for key in sel_tar_ids] #titles of selected target domain questions
+        bodies = [tar_corpus_ids[key][1] for key in sel_tar_ids] #bodies of selected target domain questions 
+        
+        titles_trunc = [t[:max_title_len] for t in titles]
+        bodies_trunc = [b[:max_body_len] for b in bodies]
+        
+        titlesPadded,bodiesPadded = create_one_batch(titles_trunc, bodies_trunc, padding_id=0, pad_left=False, max_title_len = max_title_len, max_body_len=max_body_len)   
+        tar_batches.append((titlesPadded,bodiesPadded))
+    return tar_batches
 
-def create_one_batch(titles, bodies, padding_id, pad_left):
+
+def create_one_batch(titles, bodies, padding_id=0, pad_left=False, max_title_len = None, max_body_len = None):
     '''
     Creat one padded batch for titles and bodies
     one batch here is a pool of questions, where number of questions = |titles| =|bodies|
@@ -237,8 +265,10 @@ def create_one_batch(titles, bodies, padding_id, pad_left):
         titlesPadded: array, max_title_len by num of questions in the batch
         bodiesPadded: array, max_body_len by num of questions in the batch 
     '''
-    max_title_len = max([len(x) for x in titles])
-    max_body_len = max([len(x) for x in bodies])
+    if max_title_len == None:
+        max_title_len = max([len(x) for x in titles])
+    if max_body_len == None:
+        max_body_len = max([len(x) for x in bodies])
     if pad_left:
         list_titles_padded = [np.pad(x,(max_title_len-len(x),0),mode = "constant",constant_values = padding_id) for x in titles]
         list_bodies_padded = [np.pad(x,(max_body_len-len(x),0),mode = "constant",constant_values = padding_id) for x in bodies]

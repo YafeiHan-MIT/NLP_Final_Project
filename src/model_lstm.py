@@ -47,7 +47,8 @@ class LSTM(nn.Module):
         super(LSTM, self).__init__()  
         self.hidden_dim = args.hidden_dim
         self.hidden_layers = 1 #
-        self.padding_idx = 0  
+        self.padding_idx = 0 
+        self.pad_left = args.pad_left
         self.batch_size = args.batch_size #number of source questions 
         self.vocab_size, self.embedding_dim = embeddings.shape
         self.args = args
@@ -132,8 +133,8 @@ class LSTM(nn.Module):
             h_b_final = self.average_without_padding(h_b, bodies) #h_b: num_ques * hidden_dim
             #say("h_avg_title dtype: {}\n".format(ht.dtype))
         else:  #last pooling 
-            h_t_final = self.last_without_padding(h_t,titles)
-            h_b_final = self.last_without_padding(h_b,bodies)
+            h_t_final = h_t[-1]
+            h_b_final = h_b[-1]
         #Pool title and body hidden tensor together 
         h_final = (h_t_final+h_b_final)*0.5 # num_ques * hidden_dim
         #h_final = apply_dropout(h_final, dropout) ???
@@ -162,28 +163,28 @@ class LSTM(nn.Module):
         avg = (x*mask_variable).sum(dim=0)/(mask_variable.sum(dim=0)+eps)
         return avg
     
-    def last_without_padding(self,x,ids):
-        '''
-        Last hidden output of a sequence ignoring padding 
-        
-        Input: 
-            x: Variable that contains hidden layer output tensor; size = seq_len * num_ques * hidden_dim
-            ids: actual titles or bodies word indices padded with 0 on the right(seq_len * num_ques) 
-        Output: 
-            last hidden output: num_ques * hidden_dim       
-        '''
-        seq_len, num_ques = ids.data.size()
-        mask_tensor = torch.zeros(seq_len, num_ques,self.hidden_dim)
-        #find seq last position
-        last_ind = (ids.data<>0).sum(dim=0)-1 #1D tensor: index of the seq last position
-        for i in range(num_ques):
-            mask_tensor[last_ind[i],i,:]=1 #put 1 to the last position of the sequence in mask. 
-        mask_variable = Variable(mask_tensor,requires_grad = True) #seq_len, num_ques, hidden_dim
-        
-        if self.args.cuda:
-            mask_variable = mask_variable.cuda()
-            
-        return (x*mask_variable).sum(dim=0) ##num_ques by hidden_dim
+#    def last_without_padding(self,x,ids):
+#        '''
+#        Last hidden output of a sequence ignoring padding 
+#        
+#        Input: 
+#            x: Variable that contains hidden layer output tensor; size = seq_len * num_ques * hidden_dim
+#            ids: actual titles or bodies word indices padded with 0 on the right(seq_len * num_ques) 
+#        Output: 
+#            last hidden output: num_ques * hidden_dim       
+#        '''
+#        seq_len, num_ques = ids.data.size()
+#        mask_tensor = torch.zeros(seq_len, num_ques,self.hidden_dim)
+#        #find seq last position
+#        last_ind = (ids.data<>0).sum(dim=0)-1 #1D tensor: index of the seq last position
+#        for i in range(num_ques):
+#            mask_tensor[last_ind[i],i,:]=1 #put 1 to the last position of the sequence in mask. 
+#        mask_variable = Variable(mask_tensor,requires_grad = True) #seq_len, num_ques, hidden_dim
+#        
+#        if self.args.cuda:
+#            mask_variable = mask_variable.cuda()
+#            
+#        return (x*mask_variable).sum(dim=0) ##num_ques by hidden_dim
 
     def evaluate(self, data):
         '''
@@ -195,7 +196,7 @@ class LSTM(nn.Module):
             Pass through neural net and compute accuracy measures 
         '''
         res = []
-        eval_batches = create_eval_batches(self.ids_corpus, data, padding_id=0, pad_left=False) 
+        eval_batches = create_eval_batches(self.ids_corpus, data, padding_id=0, pad_left=self.pad_left) 
         #each srouce query corresponds to one batch: (pid, [qid,...],[label,..]) 
         for batch in eval_batches:
             titles,bodies,labels = batch
