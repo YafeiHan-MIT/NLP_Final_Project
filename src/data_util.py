@@ -154,7 +154,6 @@ def read_annotations(path, num_neg=20):
             lst.append((pid, qids, qlabels))
     return lst
 
-
 def create_batches(ids_corpus, data, batch_size, padding_id=0, perm=None, pad_left=False):
     '''
     Input: 
@@ -220,35 +219,6 @@ def create_batches(ids_corpus, data, batch_size, padding_id=0, perm=None, pad_le
             pid2id = {}
             cnt = 0
     return batches 
-
-def create_batches_target(src_batches, tar_corpus_ids):
-    '''
-    Input:
-        src_batches: source domain training batches
-        tar_corpus_ids:target domain corpus (using word indices)
-            
-    Output:
-        target batches: [(titlesPadded,bodiesPadded),(titlesPadded,bodiesPadded),...]       
-    '''
-    
-    tar_batches=[]
-    for i in range(len(src_batches)):
-        ##max title length and body length should match source batch 
-        max_title_len, num_ques=src_batches[i][0].shape
-        max_body_len, num_ques=src_batches[i][1].shape
-        
-        #randomly draw same number of questions from target domain corpus 
-        sel_tar_ids=np.random.choice(tar_corpus_ids.keys(),num_ques) 
-        titles = [tar_corpus_ids[key][0] for key in sel_tar_ids] #titles of selected target domain questions
-        bodies = [tar_corpus_ids[key][1] for key in sel_tar_ids] #bodies of selected target domain questions 
-        
-        titles_trunc = [t[:max_title_len] for t in titles]
-        bodies_trunc = [b[:max_body_len] for b in bodies]
-        
-        titlesPadded,bodiesPadded = create_one_batch(titles_trunc, bodies_trunc, padding_id=0, pad_left=False, max_title_len = max_title_len, max_body_len=max_body_len)   
-        tar_batches.append((titlesPadded,bodiesPadded))
-    return tar_batches
-
 
 def create_one_batch(titles, bodies, padding_id=0, pad_left=False, max_title_len = None, max_body_len = None):
     '''
@@ -318,6 +288,169 @@ def create_eval_batches(ids_corpus, data, padding_id, pad_left):
         titles_padded, bodies_padded = create_one_batch(titles, bodies, padding_id, pad_left)
         lst.append((titles_padded, bodies_padded, np.array(qlabels, dtype="int32")))
     return lst
+
+
+def create_batches_target(src_batches, tar_corpus_ids, padding_id, pad_left):
+    '''
+    Input:
+        src_batches: source domain training batches
+        tar_corpus_ids:target domain corpus (using word indices)
+            
+    Output:
+        target batches: [(titlesPadded,bodiesPadded),(titlesPadded,bodiesPadded),...]       
+    '''
+    
+    tar_batches=[]
+    for i in range(len(src_batches)):
+        ##max title length and body length should match source batch 
+        max_title_len, num_ques=src_batches[i][0].shape
+        max_body_len, num_ques=src_batches[i][1].shape
+        
+        #randomly draw same number of questions from target domain corpus 
+        sel_tar_ids=np.random.choice(tar_corpus_ids.keys(),num_ques) 
+        titles = [tar_corpus_ids[key][0] for key in sel_tar_ids] #titles of selected target domain questions
+        bodies = [tar_corpus_ids[key][1] for key in sel_tar_ids] #bodies of selected target domain questions 
+        
+        titles_trunc = [t[:max_title_len] for t in titles]
+        bodies_trunc = [b[:max_body_len] for b in bodies]
+        
+        titlesPadded,bodiesPadded = \
+        create_one_batch(titles_trunc, bodies_trunc, padding_id=padding_id, pad_left=pad_left, max_title_len = max_title_len, max_body_len=max_body_len)   
+        tar_batches.append((titlesPadded,bodiesPadded))
+    return tar_batches
+
+def create_eval_batches_target(tar_corpus_ids, pairs, pairs_per_batch, padding_id, pad_left):
+    '''
+    Create evaluation data out of TARGET domain dev/test data 
+    pairs: list of pos pairs OR neg pairs from target domain dev/test data 
+    pairs_per_batch: number of pairs to include in each evaluation batch
+    '''
+    i = 0
+    eval_batches = []
+    while i<len(pairs):
+        pairs_indx = []
+        titles = []
+        bodies = []
+        seen = set()
+        unique_ques = []
+        for pair in pairs[i:(i+pairs_per_batch)]:
+            if pair[0] not in seen:
+                unique_ques.append(pair[0])
+                seen.add(pair[0])
+            if pair[1] not in seen:
+                unique_ques.append(pair[1])
+                seen.add(pair[1])
+        qid_to_indx = {}
+        for q in unique_ques:
+            titles.append(tar_corpus_ids[q][0])
+            bodies.append(tar_corpus_ids[q][1])
+            qid_to_indx[q]=len(titles)-1
+        for pair in pairs[i:(i+pairs_per_batch)]:
+            pairs_indx.append([qid_to_indx[pair[0]],qid_to_indx[pair[1]]])
+
+        titlesPadded,bodiesPadded = create_one_batch(titles, bodies, padding_id, pad_left, max_title_len = None, max_body_len = None)
+        eval_batches.append((titlesPadded, bodiesPadded, pairs_indx))
+        #reset for a new batch 
+        i=i+pairs_per_batch
+        pairs_indx = []
+        titles = []
+        bodies = []
+        seen = set()
+        unique_ques = []
+    return eval_batches
+
+def read_corpus_Android(path):
+    '''
+    Input: path to the corpus text file
+            text format: id, title and body sep by '\t'
+    
+    Output:
+        raw_corpus: {id:str: (title:list, body:list)}
+        text_list: a list of raw text strings that combines title and body text  
+        id_to_index: {original id (str): index(int) in the text_list}
+    '''
+    raw_corpus={}
+    empty_cnt = 0
+    fopen = gzip.open if path.endswith(".gz") else open
+    with fopen(path) as f:
+        for line in f:
+            id,title,body = line.split('\t')
+            if len(title)==0:
+                print "empty title: id=",id
+                empty_cnt+=1
+                continue
+            raw_corpus[id]=(title+' '+body).strip()
+    print empty_cnt,"empty title records are ignored.\n"
+    id_to_index = dict()
+    text_list = []
+    i=0
+    for key in raw_corpus:
+        id_to_index[key]=i
+        text_list.append(raw_corpus[key])
+        i+=1
+    return raw_corpus,text_list,id_to_index
+
+def read_labeled_pairs(path):
+    pairs=dict()
+    with open(path) as f:
+        for line in f:
+            pid,qid=line.split()
+            if pid not in pairs:
+                pairs[pid]=[qid]
+            else:
+                pairs[pid].append(qid)
+    return pairs
+    
+def read_annotations_pairs(path):
+    '''
+    Read target domain annotations 
+    '''
+            
+    f=open(path)
+    pairs = []
+    for line in f:
+        pairs.append(line.split())
+    return pairs
+    
+def read_annotations_target(path_pos,path_neg):
+    '''
+    Read target domain annotations (dev/test)
+    '''
+    pos_pairs=read_annotations_pairs(path_pos)
+    neg_pairs=read_annotations_pairs(path_neg)
+    return (pos_pairs,neg_pairs)
+
+
+##Testing code             
+#    f=open(path_pos)
+#    pos_pairs = []
+#    for line in f:
+#        pos_pairs.append(line.split())
+#    f=open(path_neg)
+#    neg_pairs = []
+#    for line in f:
+#        neg_pairs.append(line.split())
+#    
+#    companions=dict()
+#    labels = dict()
+#    for item in neg_pairs:
+#        if item[0] not in companions:
+#            companions[item[0]]=[item[1]]
+#            labels[item[0]]=[0]
+#        else:
+#            companions[item[0]].append(item[1])
+#            labels[item[0]].append(0)
+#    for item in pos_pairs:
+#        if item[0] not in companions:
+#            companions[item[0]]=[item[1]]
+#            labels[item[0]]=[1]
+#        else:
+#            companions[item[0]].append(item[1])
+#            labels[item[0]].append(1)
+#    lst=[]
+#    for key in companions:
+#        lst.append((key,companions[key],labels[key])) 
+#    return lst
 
 ###read external embedding table 
 #embedding_path='data/vector/vectors_pruned.200.txt.gz'
