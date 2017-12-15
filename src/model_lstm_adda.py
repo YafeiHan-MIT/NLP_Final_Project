@@ -286,7 +286,7 @@ class LSTM(Model):
         h_final = (h_t_final+h_b_final)*0.5 # num_ques * hidden_dim
         #h_final = apply_dropout(h_final, dropout) ???
         h_final = normalize_2d(h_final) ##normalize along hidden_dim, hidden representation of a question has norm = 1
-        self.h_final = h_final  #Tensor, num_ques * hidden_dim 
+        self.h_final = h_final  #Tensor, num_ques * hidden_dim
         return h_final
         
     def average_without_padding(self, x, ids,eps=1e-8):

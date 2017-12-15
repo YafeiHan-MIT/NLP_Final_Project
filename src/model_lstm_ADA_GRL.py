@@ -4,31 +4,166 @@ from os.path import dirname, realpath
 sys.path.append(dirname(dirname(realpath(__file__)))) ##add project path to system path list
 os.chdir(dirname(dirname(realpath(__file__)))) 
 
-import numpy as np
-import torch
 import torch.nn as nn
 from torch import autograd
-from torch.autograd import Variable
+import torch.nn.functional as F
 
 from src.init_util import get_activation_by_name
 from src.data_util import *
-from src.model_lstm import LSTM
 from src.meter import *
-    
-class LSTM_ADA(nn.Module):  
+
+
+class Model(nn.Module):
+    def __init__(self, args):
+        super(Model, self).__init__()
+        self.args = args
+
+    def evaluate_auc(self, data):
+        '''
+        Evaluate on target domain data  (dev/test)
+        data:  target domain data  (dev/test)
+
+        Return: AUC and AUC(0.05)
+        '''
+        pos_pairs, neg_pairs = data
+        AUC = AUCMeter()
+        # print 'build eval batche?s from tar_dev (pos pairs)'
+        pos_batches = create_eval_batches_target(self.args.tar_corpus_ids, pos_pairs, pairs_per_batch=2000,
+                                                 padding_id=self.args.padding_id, pad_left=self.args.pad_left)
+        # print 'size of pos_batches:', len(pos_batches)
+        count = 1
+        for pos_batch in pos_batches:
+            # print str(count), 'eval batches (positive pairs) processed'
+            count += 1
+            pos_titles, pos_bodies, pos_pairs_indx = pos_batch
+            pos_labels = np.ones(len(pos_pairs_indx))
+            pos_h_final, o = self.forward(pos_batch)
+            if self.args.cuda:
+                pos_h_final = pos_h_final.data.cpu().numpy()
+            else:
+                pos_h_final = pos_h_final.data.numpy()
+            pos_scores = []
+            for pair in pos_pairs_indx:  # compute score for each pair
+                pos_scores.append(np.dot(pos_h_final[pair[0]], pos_h_final[pair[1]]))
+            AUC.add(np.array(pos_scores), pos_labels)
+
+        # print 'build eval batches from tar_dev (neg pairs)'
+        neg_batches = create_eval_batches_target(self.args.tar_corpus_ids, neg_pairs, pairs_per_batch=2000,
+                                                 padding_id=self.args.padding_id, pad_left=self.args.pad_left)
+        # print 'size of neg_batches:', len(neg_batches)
+
+        count = 1
+        for neg_batch in neg_batches:
+            # print str(count), 'eval batches (negative pairs) processed'
+            count += 1
+            neg_titles, neg_bodies, neg_pairs_indx = neg_batch
+            neg_labels = np.zeros(len(neg_pairs_indx))
+            neg_h_final, o = self.forward(neg_batch)
+            if self.args.cuda:
+                neg_h_final = neg_h_final.data.cpu().numpy()
+            else:
+                neg_h_final = neg_h_final.data.numpy()
+            neg_scores = []
+            for pair in neg_pairs_indx:  # compute score for each pair
+                neg_scores.append(np.dot(neg_h_final[pair[0]], neg_h_final[pair[1]]))
+            AUC.add(np.array(neg_scores), neg_labels)
+
+        return AUC.value(max_fpr=1.0), AUC.value(max_fpr=0.05)
+
+    def get_pnorm_stat(self):
+        '''
+        get params norms
+        '''
+        lst_norms = []
+        for p in self.parameters():
+            lst_norms.append("{:.3f}".format(p.norm(2).data[0]))
+        return lst_norms
+
+    def get_l2_reg(self):
+        l2_reg = None
+        for p in self.parameters():
+            if l2_reg is None:
+                l2_reg = p.norm(2)
+            else:
+                l2_reg = l2_reg + p.norm(2)
+        l2_reg = l2_reg * self.args.l2_reg
+        return l2_reg
+
+
+class CNN_ADA(Model):
+    def __init__(self, args, embeddings):
+        super(CNN_ADA, self).__init__(args)
+
+        args.vocab_size, args.embedding_dim = embeddings.shape
+        self.args = args
+        self.lambd = args.lambd
+
+        self.embedding = nn.Embedding(args.vocab_size, args.embedding_dim, args.padding_id)
+        if args.cuda:
+            self.embedding = self.embedding.cuda()
+        self.embedding.weight.data = torch.from_numpy(embeddings)  # fixed embedding
+
+        filter_width = 3
+        self.conv = nn.Conv1d(args.embedding_dim, args.hidden_dim, filter_width)
+        if args.average:
+            self.pool = nn.AvgPool1d(filter_width)
+        else:
+            self.pool = nn.MaxPool1d(filter_width)
+
+        self.linear1 = nn.Linear(args.hidden_dim, args.hidden_dim_dc)
+        self.linear2 = nn.Linear(args.hidden_dim_dc, 2)  # from hidden to output 2 domain classes
+        self.log_softmax = nn.LogSoftmax()
+
+    def forward(self, batch):
+        titles, bodies, triples = batch
+        titles = Variable(torch.from_numpy(titles).long(), requires_grad=False)
+        bodies = Variable(torch.from_numpy(bodies).long(), requires_grad=False)
+
+        if self.args.cuda:
+            titles = titles.cuda()
+            bodies = bodies.cuda()
+
+        ## embedding layer: word indices => embeddings
+        embeds_titles = self.embedding(titles)  # seq_len_title * num_ques * embed_dim
+        embeds_bodies = self.embedding(bodies)  # seq_len_body * num_ques * embed_dim
+
+        # turn (seq_len x batch_size x input_size) into (batch_size x input_size x seq_len)
+        xt = embeds_titles.transpose(0, 1).transpose(1, 2)
+        xb = embeds_bodies.transpose(0, 1).transpose(1, 2)
+
+        xt = F.tanh(self.conv(xt))
+        xb = F.tanh(self.conv(xb))
+
+        xt = F.tanh(self.pool(xt))
+        xb = F.tanh(self.pool(xb))
+
+        xt = normalize_3d(xt)
+        xb = normalize_3d(xb)
+
+        h_final = normalize_2d(xt.mean(2) + xb.mean(2))
+        h = gradient_reverse(h_final, self.lambd)  #####Apply GRL before domain classification
+        h = self.linear1(h)
+        h = F.relu(h)
+        o = self.linear2(h)
+        o = self.log_softmax(o)
+        return h_final, o
+
+
+class LSTM_ADA(Model):
     '''
     LSTM for learning similarity between questions 
     Adverserial Domain Adaptation 
     
     '''
-    def __init__(self, embeddings,args): 
+    def __init__(self, args, embeddings):
         '''
         embeddings: fixed embedding table (2-D array, dim=vocab_size * embedding_dim: 100407x200)
         '''
-        super(LSTM_ADA, self).__init__()  
-        args.vocab_size,args.embedding_dim = embeddings.shape
-        self.args = args #pass on args together to the model
-        
+        super(LSTM_ADA, self).__init__(args)
+        args.vocab_size, args.embedding_dim = embeddings.shape
+        self.args = args # pass on args together to the model
+        self.lambd = args.lambd
+
         ##Layers
         self.embedding = nn.Embedding(args.vocab_size, args.embedding_dim, args.padding_id)
         if args.cuda:
@@ -109,8 +244,7 @@ class LSTM_ADA(nn.Module):
         if self.args.average: # Average over sequence length, ignoring paddings
             h_t_final = self.average_without_padding(h_t, titles) #h_t: num_ques * hidden_dim
             h_b_final = self.average_without_padding(h_b, bodies) #h_b: num_ques * hidden_dim
-            #say("h_avg_title dtype: {}\n".format(ht.dtype))
-        else:  #last pooling 
+        else:  #last pooling
             h_t_final = self.last_without_padding(h_t,titles)
             h_b_final = self.last_without_padding(h_b,bodies)
         #Pool title and body hidden tensor together 
@@ -121,10 +255,10 @@ class LSTM_ADA(nn.Module):
         # first half: source domain questions  
         # second half: target domain questions  
         
-        h=gradient_reverse(h_final,self.lambd) #####Apply GRL before domain classification 
+        h = gradient_reverse(h_final, self.lambd) #####Apply GRL before domain classification
         
-        h = self.linear1(h_final)
-        h = self.activation(h)
+        h = self.linear1(h)
+        h = F.relu(h)
         o = self.linear2(h)
         o = self.log_softmax(o)
         return h_final,o
@@ -171,97 +305,6 @@ class LSTM_ADA(nn.Module):
         if self.args.cuda:
             mask_variable = mask_variable.cuda() 
         return (x*mask_variable).sum(dim=0) ##num_ques by hidden_dim
-
-###not used for domain adaptation 
-#    def evaluate(self, data):
-#        '''
-#        Input: 
-#            data: dev or test data 
-#                 a list of tuples: (pid, [qid,...],[label,..])  output from read_annotations()
-#                 20 qids and 20 labels corresponding to the candidate set of source query p. 
-#        Output: 
-#            Pass through neural net and compute accuracy measures 
-#        '''
-#        res = []
-#        eval_batches = create_eval_batches(self.args.ids_corpus, data, padding_id=0, pad_left=self.args.pad_left) 
-#        #each srouce query corresponds to one batch: (pid, [qid,...],[label,..]) 
-#        for batch in eval_batches:
-#            titles,bodies,labels = batch
-#            h_final = self.forward(batch,False) #not training 
-#            scores = cosSim(h_final)
-#            #assert len(scores) == len(labels) #20
-#            ranks = np.array((-scores.data).tolist()).argsort() #sort by score 
-#            ranked_labels = labels[ranks]
-#            res.append(ranked_labels.tolist()) ##a list of labels for the ranked retrievals
-#        e = src.evaluation.Evaluation(res)
-#        MAP = e.MAP()*100
-#        MRR = e.MRR()*100
-#        P1 = e.Precision_at_R(1)*100
-#        P5 = e.Precision_at_R(5)*100
-#        return MAP, MRR, P1, P5
-    
-    def evaluate_auc(self,data):
-        '''
-        Evaluate on target domain data  (dev/test)
-        data:  target domain data  (dev/test)
-        
-        Return: AUC and AUC(0.05)
-        '''
-        pos_pairs,neg_pairs = data
-        AUC = AUCMeter()
-        print 'build eval batches from tar_dev (pos pairs)'
-        pos_batches = create_eval_batches_target(self.args.tar_corpus_ids, pos_pairs, pairs_per_batch=5000, padding_id=self.args.padding_id, pad_left=self.args.pad_left)
-        print 'size of pos_batches:', len(pos_batches)
-        count = 1
-        for pos_batch in pos_batches:
-            print str(count),'eval batches (positive pairs) processed'
-            count+=1
-            pos_titles, pos_bodies, pos_pairs_indx = pos_batch
-            pos_labels = np.ones(len(pos_pairs_indx))
-            pos_h_final,o = self.forward(pos_batch) 
-            pos_h_final = pos_h_final.data.numpy()
-            pos_scores = []
-            for pair in pos_pairs_indx:#compute score for each pair
-                pos_scores.append(np.dot(pos_h_final[pair[0]],pos_h_final[pair[1]]))        
-            AUC.add(np.array(pos_scores),pos_labels)
-          
-        print 'build eval batches from tar_dev (neg pairs)'
-        neg_batches = create_eval_batches_target(self.args.tar_corpus_ids, neg_pairs, pairs_per_batch=5000, padding_id=self.args.padding_id, pad_left=self.args.pad_left)
-        print 'size of neg_batches:', len(neg_batches)
-        
-        count = 1
-        for neg_batch in neg_batches:
-            print str(count),'eval batches (negative pairs) processed'
-            count+=1
-            neg_titles, neg_bodies, neg_pairs_indx = neg_batch
-            neg_labels = np.zeros(len(neg_pairs_indx))
-            neg_h_final,o = self.forward(neg_batch) 
-            neg_h_final = neg_h_final.data.numpy()
-            neg_scores = []
-            for pair in neg_pairs_indx:#compute score for each pair
-                neg_scores.append(np.dot(neg_h_final[pair[0]],neg_h_final[pair[1]]))        
-            AUC.add(np.array(neg_scores),neg_labels)
-        
-        return AUC.value(max_fpr=1.0),AUC.value(max_fpr=0.05)
-
-    def get_pnorm_stat(self):
-        '''
-        get params norms
-        '''
-        lst_norms = []
-        for p in self.parameters():
-            lst_norms.append("{:.3f}".format(p.norm(2).data[0]))
-        return lst_norms
-    
-    def get_l2_reg(self):
-        l2_reg = None
-        for p in self.parameters():
-            if l2_reg is None:
-                l2_reg = p.norm(2)
-            else:
-                l2_reg = l2_reg + p.norm(2)
-        l2_reg = l2_reg * self.args.l2_reg
-        return l2_reg
     
 
 def max_margin_loss(args,h_final,triples,margin):
@@ -323,8 +366,6 @@ def normalize_2d(x, eps=1e-8):
     l2 = x.norm(2,dim=1)  #l2: 1d tensor of dim = num_ques
     l2 = l2.view(len(l2),-1) #change l2's dimension to: num_ques * 1
     return x/(l2+eps)  
-
-
 
 
 ###Alternative implementation: use GRL layer 

@@ -4,7 +4,6 @@ Code took from PyTorchNet (https://github.com/pytorch/tnt)
 
 '''
 
-import math
 import numbers
 import numpy as np
 import torch

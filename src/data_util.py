@@ -50,6 +50,36 @@ def read_corpus(path):
             raw_corpus[id]=(title,body)
     say("{} empty title records are ignored.\n".format(empty_cnt))
     return raw_corpus
+
+
+def read_corpus_get_unique(path):
+    '''
+    Return a raw corpus dictionary: {id:(title,body)} and set of unique words (Set[string]).
+
+    Input: path to the corpus text file
+            text format: id, title and body sep by '\t'
+
+    Output: {id:str: (title:list, body:list)}, Set[string]
+
+    '''
+    raw_corpus = {}
+    empty_cnt = 0
+    vocab = set()
+    fopen = gzip.open if path.endswith(".gz") else open
+    with fopen(path) as f:
+        for line in f:
+            id, title, body = line.split('\t')
+            if len(title) == 0:
+                print "empty title: id=", id
+                empty_cnt += 1
+                continue
+            title = title.strip().lower().split()
+            body = body.strip().lower().split()
+            unique_words = set(title + body)
+            vocab.update(unique_words)
+            raw_corpus[id] = (title, body)
+    say("{} empty title records are ignored.\n".format(empty_cnt))
+    return raw_corpus, vocab
    
 def words_to_indices(word_list, word_to_indx,if_filter=True):
     '''
@@ -67,30 +97,34 @@ def words_to_indices(word_list, word_to_indx,if_filter=True):
         indices = filter(not_oov, indices)
     return np.array(indices)
          
-def getEmbeddingTable(embedding_path):
+def getEmbeddingTable(embedding_path, vocab=None):
     '''
     Input: 
         a fixed embedding lookup file: word, embedding vector
+        vocab: (set) all unique words in training corpus (used to reduce embedding table size)
     Output: 
         embeddings: (vocabSize+1) by embed_dim array
                     embeddings[0,:] = [0,...0] reserved for words not in the embedding vocabulary!
                     embeddings[indx,:] is word indx's embedding vector
         word_to_indx: {word: indx}
     '''
-    lines = []
-    with gzip.open(embedding_path) as file:
-        lines = file.readlines()
-        file.close()
     embeddings = []
     word_to_indx = {}
-    for indx, l in enumerate(lines):
-        word, emb = l.split()[0], l.split()[1:]
-        vector = [float(x) for x in emb ]
-        if indx == 0: # reserve word index 0 for words not in embedding dictionary
-            embeddings.append(np.zeros(len(vector)))
-        embeddings.append(vector)
-        word_to_indx[word] = indx
-    embeddings = np.array(embeddings, dtype=np.float32)
+    indx = 0
+    with gzip.open(embedding_path) as file:
+        for l in file:
+            word, emb = l.split()[0], l.split()[1:]
+            if vocab is not None and word not in vocab:
+                continue
+
+            vector = [float(x) for x in emb ]
+            if indx == 0: # reserve word index 0 for words not in embedding dictionary
+                embeddings.append(np.zeros(len(vector)))
+                indx += 1
+            embeddings.append(vector)
+            word_to_indx[word] = indx
+            indx += 1
+        embeddings = np.array(embeddings, dtype=np.float32)
     return embeddings, word_to_indx
 
 def map_corpus(raw_corpus, embeddings, word_to_indx, max_len=100):

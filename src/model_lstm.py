@@ -4,24 +4,13 @@ import os
 from os.path import dirname, realpath
 sys.path.append(dirname(dirname(realpath(__file__)))) ##add project path to system path list
 os.chdir(dirname(dirname(realpath(__file__)))) #u'/Users/yafeihan/Dropbox (MIT)/Courses_MIT/6.864_NLP/NLP_Final_Project'
-
-import numpy as np
-import operator
-import sklearn as sk
-import math, sys, nltk
-import torch.nn as nn
-import torch
-import random
-import time
 from torch import autograd
-from torch.autograd import Variable
-import torch.optim as optim
-import pdb
-import torch.nn.functional as F
-from optparse import OptionParser
 from src.init_util import *
 from src.data_util import *
-import src.evaluation 
+from src.meter import *
+import torch.nn.functional as F
+from src.evaluation import Evaluation
+
 
 def get_model(embeddings, args):
     '''
@@ -33,18 +22,124 @@ def get_model(embeddings, args):
     print("\nBuilding model...")
     if args.model_name == 'lstm':
         return LSTM(embeddings, args)
+    elif args.model_name == 'cnn':
+        return CNN(embeddings, args)
     else:
-        raise Exception("Model name {} not supported!".format(args.model_name))    
+        raise Exception("Model name {} not supported!".format(args.model_name))
+
+
+class Model(nn.Module):
+    def __init__(self, args):
+        super(Model, self).__init__()
+        self.args = args
+
+    def evaluate(self, data):
+        '''
+        Input: 
+            data: dev or test data 
+                 a list of tuples: (pid, [qid,...],[label,..])  output from read_annotations()
+                 20 qids and 20 labels corresponding to the candidate set of source query p. 
+        Output: 
+            Pass through neural net and compute accuracy measures 
+        '''
+        res = []
+        eval_batches = create_eval_batches(self.ids_corpus, data, padding_id=0, pad_left=self.pad_left) 
+        #each srouce query corresponds to one batch: (pid, [qid,...],[label,..]) 
+        for batch in eval_batches:
+            titles,bodies,labels = batch
+            h_final = self.forward(batch,False) #not training 
+            scores = cosSim(h_final)
+            #assert len(scores) == len(labels) #20
+            ranks = np.array((-scores.data).tolist()).argsort() #sort by score 
+            ranked_labels = labels[ranks]
+            res.append(ranked_labels.tolist()) ##a list of labels for the ranked retrievals
+        e = src.evaluation.Evaluation(res)
+        MAP = e.MAP()*100
+        MRR = e.MRR()*100
+        P1 = e.Precision_at_R(1)*100
+        P5 = e.Precision_at_R(5)*100
+        return MAP, MRR, P1, P5
+ 
+    def get_pnorm_stat(self):
+        '''
+        get params norms
+        '''
+        lst_norms = []
+        for p in self.parameters():
+            lst_norms.append("{:.3f}".format(p.norm(2).data[0]))
+        return lst_norms
     
-class LSTM(nn.Module):  
+    def get_l2_reg(self):
+        l2_reg = None
+        for p in self.parameters():
+            if l2_reg is None:
+                l2_reg = p.norm(2)
+            else:
+                l2_reg = l2_reg + p.norm(2)
+        l2_reg = l2_reg * self.args.l2_reg
+        return l2_reg
+
+
+class CNN(Model):
+    def __init__(self, embeddings, args):
+        super(CNN, self).__init__(args)
+        print "CNN Model"
+
+        args.vocab_size, args.embedding_dim = embeddings.shape
+        self.args = args
+
+        self.padding_idx = 0
+        self.vocab_size, self.embedding_dim = embeddings.shape
+        self.embedding = nn.Embedding(self.vocab_size, self.embedding_dim, self.padding_idx)
+        if args.cuda:
+            self.embedding = self.embedding.cuda()
+        self.embedding.weight.data = torch.from_numpy(embeddings)  # fixed embedding
+
+        filter_width = 3
+        self.conv = nn.Conv1d(args.embedding_dim, args.hidden_dim, filter_width)
+        self.pool = nn.MaxPool1d(filter_width)
+
+    def forward(self, batch):
+        titles, bodies, triples = batch
+        titles = Variable(torch.from_numpy(titles).long(), requires_grad=False)
+        bodies = Variable(torch.from_numpy(bodies).long(), requires_grad=False)
+
+        if self.args.cuda:
+            titles = titles.cuda()
+            bodies = bodies.cuda()
+
+        ## embedding layer: word indices => embeddings
+        embeds_titles = self.embedding(titles)  # seq_len_title * num_ques * embed_dim
+        embeds_bodies = self.embedding(bodies)  # seq_len_body * num_ques * embed_dim
+
+        # turn (seq_len x batch_size x input_size) into (batch_size x input_size x seq_len)
+        xt = embeds_titles.transpose(0, 1).transpose(1, 2)
+        xb = embeds_bodies.transpose(0, 1).transpose(1, 2)
+
+        xt = F.tanh(self.conv(xt))
+        xb = F.tanh(self.conv(xb))
+
+        xt = F.tanh(self.pool(xt))
+        xb = F.tanh(self.pool(xb))
+
+        xt = normalize_3d(xt)
+        xb = normalize_3d(xb)
+
+        h_final = normalize_2d(xt.mean(2) + xb.mean(2))
+        return h_final
+
+
+class LSTM(Model):
     '''
     LSTM for learning similarity between questions 
     '''
-    def __init__(self,embeddings,args): 
+    def __init__(self, embeddings, args):
+
         '''
         embeddings: fixed embedding table (2-D array, dim=vocab_size * embedding_dim: 100407x200)
         '''
-        super(LSTM, self).__init__()  
+        super(LSTM, self).__init__(args)
+        print "LSTM Model"
         self.hidden_dim = args.hidden_dim
         self.hidden_layers = 1 #
         if args.bidirectional:
@@ -86,7 +181,7 @@ class LSTM(nn.Module):
             b = b.cuda()
         return (t, b)
 
-    def forward(self, batch, if_training):
+    def forward(self, batch):
         '''
         Pass one batch
         Input:
@@ -124,7 +219,7 @@ class LSTM(nn.Module):
         ## activation function 
         h_t = self.activation(h_t) #seq_len * num_ques * hidden_dim
         h_b = self.activation(h_b) #seq_len * num_ques * hidden_dim
-        
+
         if not self.args.bidirectional:
             #if args.normalize:
             h_t = normalize_3d(h_t)
@@ -209,52 +304,6 @@ class LSTM(nn.Module):
         if self.args.cuda:
             mask_variable = mask_variable.cuda() 
         return (x*mask_variable).sum(dim=0) ##num_ques by hidden_dim
-
-    def evaluate(self, data):
-        '''
-        Input: 
-            data: dev or test data 
-                 a list of tuples: (pid, [qid,...],[label,..])  output from read_annotations()
-                 20 qids and 20 labels corresponding to the candidate set of source query p. 
-        Output: 
-            Pass through neural net and compute accuracy measures 
-        '''
-        res = []
-        eval_batches = create_eval_batches(self.ids_corpus, data, padding_id=0, pad_left=self.pad_left) 
-        #each srouce query corresponds to one batch: (pid, [qid,...],[label,..]) 
-        for batch in eval_batches:
-            titles,bodies,labels = batch
-            h_final = self.forward(batch,False) #not training 
-            scores = cosSim(h_final)
-            #assert len(scores) == len(labels) #20
-            ranks = np.array((-scores.data).tolist()).argsort() #sort by score 
-            ranked_labels = labels[ranks]
-            res.append(ranked_labels.tolist()) ##a list of labels for the ranked retrievals
-        e = src.evaluation.Evaluation(res)
-        MAP = e.MAP()*100
-        MRR = e.MRR()*100
-        P1 = e.Precision_at_R(1)*100
-        P5 = e.Precision_at_R(5)*100
-        return MAP, MRR, P1, P5
- 
-    def get_pnorm_stat(self):
-        '''
-        get params norms
-        '''
-        lst_norms = []
-        for p in self.parameters():
-            lst_norms.append("{:.3f}".format(p.norm(2).data[0]))
-        return lst_norms
-    
-    def get_l2_reg(self):
-        l2_reg = None
-        for p in self.parameters():
-            if l2_reg is None:
-                l2_reg = p.norm(2)
-            else:
-                l2_reg = l2_reg + p.norm(2)
-        l2_reg = l2_reg * self.args.l2_reg
-        return l2_reg
     
 
 def max_margin_loss(args,h_final,batch,margin):

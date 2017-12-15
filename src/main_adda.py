@@ -219,6 +219,6 @@ if __name__ == '__main__':
         discriminator = discriminator.cuda()
 
     optimizer_d = torch.optim.Adam(discriminator.parameters(), lr=args.learning_rate, weight_decay=0)
-    optimizer_m = torch.optim.Adam(target_model.parameters(), lr=args.learning_rate, weight_decay=0)
+    optimizer_m = torch.optim.Adam(target_model.parameters(), lr=args.learning_rate * 2, weight_decay=0)
     train_target_model(args, source_model, target_model, discriminator, train, tar_dev, tar_test, optimizer_d,
                        optimizer_m)

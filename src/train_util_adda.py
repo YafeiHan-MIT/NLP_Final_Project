@@ -139,6 +139,7 @@ def train_target_model(args, source_model, target_model, discriminator, train, t
 def run_tar_train_epoch(args, source_model, target_model, discriminator, train, tar_dev, tar_test, optimizer_d,
                         optimizer_m):
     # set model to train mode
+    discriminator.train()
     target_model.train()
 
     # create batch from source corpus
@@ -148,24 +149,27 @@ def run_tar_train_epoch(args, source_model, target_model, discriminator, train, 
     tar_batches = create_batches_target(src_batches, args.tar_corpus_ids, padding_id=args.padding_id,
                                         pad_left=args.pad_left)
 
+    # create multiple tar_batches for training M
+    tar_batches_m = [tar_batches]
+    for i in range(3):
+        tar_batches_m.append(create_batches_target(src_batches, args.tar_corpus_ids, padding_id=args.padding_id,
+                                        pad_left=args.pad_left))
+
     N = len(src_batches)
     train_loss_m = 0.0
     train_loss_d = 0.0
 
     for i in xrange(N):
+
+        optimizer_d.zero_grad()
+
         src_titles, src_bodies, triples = src_batches[i]
-        tar_titles, tar_bodies = tar_batches[i]
 
         # get representation from source and target models
         src_h_final = source_model(src_batches[i])
         tar_h_final = target_model(tar_batches[i])
 
         num_ques = src_titles.shape[1]
-
-        # target_model.zero_grad()
-        # discriminator.zero_grad()
-        optimizer_d.zero_grad()
-        optimizer_m.zero_grad()
 
         # train D on source
         src_pred = discriminator(src_h_final)
@@ -174,8 +178,8 @@ def run_tar_train_epoch(args, source_model, target_model, discriminator, train, 
         if args.cuda:
             expected_ones = expected_ones.cuda()
 
-        loss_d = F.binary_cross_entropy(src_pred, expected_ones)
-        loss_d.backward(retain_graph=True)
+        src_loss_d = F.binary_cross_entropy(src_pred, expected_ones)
+        src_loss_d.backward(retain_graph=True)
 
         # train D on target
         tar_pred = discriminator(tar_h_final)
@@ -183,17 +187,24 @@ def run_tar_train_epoch(args, source_model, target_model, discriminator, train, 
         expected_zeros = Variable(torch.zeros(num_ques))
         if args.cuda:
             expected_zeros = expected_zeros.cuda()
-        loss_d = F.binary_cross_entropy(tar_pred, expected_zeros)
-        loss_d.backward(retain_graph=True)
+
+        tar_loss_d = F.binary_cross_entropy(tar_pred, expected_zeros)
+        tar_loss_d.backward()
         optimizer_d.step()
 
         # see how well M fooled the discriminator
-        loss_m = F.binary_cross_entropy(tar_pred, expected_ones)
-        loss_m.backward(retain_graph=True)
-        optimizer_m.step()
+        for batch in tar_batches_m:
+            optimizer_m.zero_grad()
+            tar_h_final = target_model(batch[i])
+            tar_pred = discriminator(tar_h_final)
+            tar_pred = tar_pred.view(tar_pred.size(0))
+            loss_m = F.binary_cross_entropy(tar_pred, expected_ones)
+            loss_m.backward()
+            optimizer_m.step()
 
-        train_loss_m += loss_m.data
-        train_loss_d += loss_d.data
+            train_loss_m += loss_m.data
+
+        train_loss_d += src_loss_d.data + tar_loss_d.data
 
         if i % 10 == 0:
             say("\r{}/{}".format(i, N))

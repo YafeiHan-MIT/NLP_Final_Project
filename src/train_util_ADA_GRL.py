@@ -5,19 +5,12 @@ Created on Fri Nov 24 15:05:10 2017
 @author: yafei
 """
 
-import numpy as np
-import sys
 import time
-
-import torch
-from torch import autograd
-import torch.nn.functional as F
 from prettytable import PrettyTable
 
-from src.init_util import *
-from src.data_util import *
-from src.model_lstm_ADA import *
+from src.model_lstm_ADA_GRL import *
 from src.meter import *
+
 
 def train_model(model, train, tar_dev, tar_test,optimizer_f,optimizer_d):
     '''
@@ -40,7 +33,7 @@ def train_model(model, train, tar_dev, tar_test,optimizer_f,optimizer_d):
         unchanged += 1
         if unchanged > model.args.max_unchanged: break
         start_time = time.time()
-        print "Training Epoch", str(epoch)
+        # print "Training Epoch", str(epoch)
         train_loss, dev_eva, test_eva = run_epoch(train, tar_dev, tar_test, model, optimizer_f,optimizer_d)
         dev_auc,dev_auc005 = dev_eva
         test_auc,test_auc005 = test_eva
@@ -92,10 +85,10 @@ def run_epoch(train, tar_dev, tar_test, model, optimizer_f, optimizer_d):
         test_eva: (test_auc,test_auc005)
 
     '''
-    print "\nCreate training batches from source domain..."
+    # print "\nCreate training batches from source domain..."
     src_batches = create_batches(model.args.src_corpus_ids,train,model.args.batch_size, padding_id=model.args.padding_id, perm=None, pad_left=model.args.pad_left)
     
-    print "\nCreate training batches from target domain...\n (Draw same # of questions from target corpus.."
+    # print "\nCreate training batches from target domain...\n (Draw same # of questions from target corpus.."
     tar_batches = create_batches_target(src_batches, model.args.tar_corpus_ids, padding_id = model.args.padding_id, pad_left=model.args.pad_left)
 
     #N=10 ##small num for testing
@@ -120,7 +113,10 @@ def run_epoch(train, tar_dev, tar_test, model, optimizer_f, optimizer_d):
         #True domain labels
         domain_true = torch.zeros(num_ques)
         domain_true[num_ques/2:]=1 
-        domain_true = autograd.Variable(domain_true.long())
+        domain_true = autograd.Variable(domain_true)
+
+        if model.args.cuda:
+            domain_true = domain_true.cuda()
         
         ##Foward pass
         h_final,domain_pred=model(batch)  #h_final: feature extractor outcome; pred_d: predicted domain (log_softmax)
@@ -129,48 +125,29 @@ def run_epoch(train, tar_dev, tar_test, model, optimizer_f, optimizer_d):
         h_final_src = h_final[:num_ques/2,:]  #first half is from src domain 
         loss_y = max_margin_loss(model.args,h_final_src,triples,model.args.margin)
         cost_y = loss_y + model.get_l2_reg()
-        
+
+        domain_pred = torch.max(domain_pred, 1)[0]
+
         ##Compute loss for domain classification
-        loss_d = F.nll_loss(domain_pred,domain_true)
+        loss_d = F.mse_loss(domain_pred,domain_true)
         
         ##Total loss 
         loss = loss_y - model.args.lambd * loss_d
-        print 'loss_y,loss_d,loss',loss_y.data[0],loss_d.data[0],loss.data[0]
-        
+
         ##backpropagation
-        
-        optimizer_f.zero_grad()
-        loss_y.backward(retain_graph=True)  #back propagation, compute gradient 
-        optimizer_f.step() 
-        
         optimizer_f.zero_grad()
         optimizer_d.zero_grad()
-        loss_d.backward()  #back propagation, compute gradient 
-        optimizer_f.step() 
+        loss.backward()
+        optimizer_f.step()
         optimizer_d.step()
-        
-#        optimizer_f.zero_grad()
-#        optimizer_d.zero_grad()
-#        loss.backward()
-#        optimizer_f.step()
-#        optimizer_d.step()
         
         train_loss_y += loss_y.data
         train_cost_y += cost_y.data
         train_loss_d += loss_d.data
         train_loss += loss.data
         
-## Observe if a subset of parameters change in each iteration 
-#        print [p for p in model.parameters()][1].data[0:5]
-#        print [p for p in model.parameters()][5].data[0:5]
-        
         if i%10 == 0: #print after processing every 10 batches 
             say("\r{}/{}".format(i,N))
-            print "\n"
-            print "loss_y,cost_y (similarity):", (train_loss_y/(i+1))[0], (train_cost_y/(i+1))[0]
-            print "loss_d (domain classification):", (train_loss_d/(i+1))[0]
-            print "loss:", (train_loss/(i+1))[0]
-            print "\n"
              
         ##Evaluate on TARGET dev/test data at the end of this training epoch 
         avg_train_loss = (train_loss/(i+1))[0]
@@ -181,6 +158,12 @@ def run_epoch(train, tar_dev, tar_test, model, optimizer_f, optimizer_d):
                 dev_eva = model.evaluate_auc(tar_dev)
             if tar_test is not None: 
                 test_eva = model.evaluate_auc(tar_test)
+
+            print "\n"
+            print "loss_y,cost_y (similarity):", (train_loss_y / (i + 1))[0], (train_cost_y / (i + 1))[0]
+            print "loss_d (domain classification):", (train_loss_d / (i + 1))[0]
+            print "loss:", (train_loss / (i + 1))[0]
+            print "\n"
     return avg_train_loss, dev_eva, test_eva
 
 
