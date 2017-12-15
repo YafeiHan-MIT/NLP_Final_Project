@@ -35,20 +35,21 @@ class Evaluation():
             float MAP
         '''
         AP = [] #list of Average Precision(AP) for all queries in self.data
+        missing_MAP = 0.0
         for labels in self.data: #examine each query
             count_pos = 0.0 ##accumulative count of relevant documents 
             Pk = [] #precision of the first (k+1) retrievals for a single query
-            last=len(labels) - 1 - labels[::-1].index(1) #find the index for the last occurence of label=1
+            #last=len(labels) - 1 - labels[::-1].index(1) #find the index for the last occurence of label=1
             for k,label in enumerate(labels): #k: rank of retrieved doc, label: 1 if relevant, 0 not relevant
-                if k>last:break
+                #if k>last:break
                 if label == 1:
                     count_pos += 1.0
-                Pk.append(count_pos/(k+1)) #precision for the first (k+1) retrievals
+                    Pk.append(count_pos/(k+1)) #precision for the first (k+1) retrievals
             if len(Pk)>0: 
                 AP.append(sum(Pk)/len(Pk))
             else:
-                AP.append(0.0)
-        return sum(AP)/len(AP) #average over all queries up to the last occurence of the pos example.
+                missing_MAP+= 1
+        return sum(AP)/len(AP) if len(AP)>0 else 0.0 #average over all queries up to the last occurence of the pos example.
     
     def MRR(self):
         '''
@@ -73,14 +74,16 @@ class Evaluation():
 
               
 ##My testing code
-#data = [[],[]]
-#data1 = [[0],[0,1,1],[0,1,1,1,1],[0,1,1,1]]
+data1 = [[0,0,1]]
 #e=Evaluation(data)
-#e1=Evaluation(data1)
+e1=Evaluation(data1)
 #print e.MAP()
-#print e1.MAP()
+print e1.MAP()
 #print e.MRR()
 #print e1.Precision_at_R(2)
+
+#[0,1,1],[0,1,1,1,1],[0,1,1,1]
+
 
 
                        
