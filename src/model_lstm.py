@@ -23,7 +23,7 @@ from src.init_util import *
 from src.data_util import *
 import src.evaluation 
 
-def get_model(embeddings, ids_corpus, args):
+def get_model(embeddings, args):
     '''
     Build a model - a subclass of nn.Module, e.g. lstm, DAN, RNN etc. 
     given fixed embedding and a model parameters specified by user in args.
@@ -32,7 +32,7 @@ def get_model(embeddings, ids_corpus, args):
     '''
     print("\nBuilding model...")
     if args.model_name == 'lstm':
-        return LSTM(embeddings,ids_corpus, args)
+        return LSTM(embeddings, args)
     else:
         raise Exception("Model name {} not supported!".format(args.model_name))    
     
@@ -40,18 +40,23 @@ class LSTM(nn.Module):
     '''
     LSTM for learning similarity between questions 
     '''
-    def __init__(self, embeddings,ids_corpus, args): 
+    def __init__(self,embeddings,args): 
         '''
         embeddings: fixed embedding table (2-D array, dim=vocab_size * embedding_dim: 100407x200)
         '''
         super(LSTM, self).__init__()  
         self.hidden_dim = args.hidden_dim
         self.hidden_layers = 1 #
+        if args.bidirectional:
+            self.num_directions = 2
+        else:
+            self.num_directions = 1
         self.padding_idx = 0 
         self.pad_left = args.pad_left
         self.batch_size = args.batch_size #number of source questions 
         self.vocab_size, self.embedding_dim = embeddings.shape
         self.args = args
+        
         ##Define layers in the nnet
         self.embedding = nn.Embedding(self.vocab_size, self.embedding_dim, self.padding_idx)
         if args.cuda:
@@ -61,10 +66,9 @@ class LSTM(nn.Module):
                             input_size = self.embedding_dim, 
                             hidden_size = self.hidden_dim, 
                             num_layers = self.hidden_layers, 
+                            bidirectional=args.bidirectional,
                             dropout=args.dropout)
         self.activation = get_activation_by_name('tanh')  ##can choose other activation function specified in args 
-        #self.crit = nn.MultiMarginLoss(p=1, margin=0.2, weight=None, size_average=True)
-        self.ids_corpus = ids_corpus
         
     def init_hidden(self,num_ques):
         '''
@@ -72,11 +76,11 @@ class LSTM(nn.Module):
             num_ques: number of unique questions (source query & candidate queries) in the current batch. 
             (NOTE:  diff from batch_size := num of source questions)             
         Return (h_0, c_0): hidden and cell state at position t=0
-            h_0 (num_layers * num_directions=1, batch, hidden_dim): tensor containing the initial hidden state for each element in the batch.
-            c_0 (num_layers * num_directions=1, batch, hidden_dim): tensor containing the initial cell state for each element in the batch.
+            h_0 (num_layers * num_directions, batch, hidden_dim): tensor containing the initial hidden state for each element in the batch.
+            c_0 (num_layers * num_directions, batch, hidden_dim): tensor containing the initial cell state for each element in the batch.
         '''
-        t = autograd.Variable(torch.zeros(self.hidden_layers, num_ques, self.hidden_dim),requires_grad = True)
-        b = autograd.Variable(torch.zeros(self.hidden_layers, num_ques, self.hidden_dim),requires_grad = True)
+        t = autograd.Variable(torch.zeros(self.hidden_layers*self.num_directions, num_ques, self.hidden_dim),requires_grad = True)
+        b = autograd.Variable(torch.zeros(self.hidden_layers*self.num_directions, num_ques, self.hidden_dim),requires_grad = True)
         if self.args.cuda:
             t = t.cuda()
             b = b.cuda()
@@ -121,20 +125,41 @@ class LSTM(nn.Module):
         h_t = self.activation(h_t) #seq_len * num_ques * hidden_dim
         h_b = self.activation(h_b) #seq_len * num_ques * hidden_dim
         
-        #if args.normalize:
-        h_t = normalize_3d(h_t)
-        h_b = normalize_3d(h_b)
-        
-        self.h_t = h_t #self.h_t: seq_len * num_ques * hidden_dim
-        self.h_b = h_b #self.h_b: seq_len * num_ques * hidden_dim
-        
-        if self.args.average: # Average over sequence length, ignoring paddings
-            h_t_final = self.average_without_padding(h_t, titles) #h_t: num_ques * hidden_dim
-            h_b_final = self.average_without_padding(h_b, bodies) #h_b: num_ques * hidden_dim
-            #say("h_avg_title dtype: {}\n".format(ht.dtype))
-        else:  #last pooling 
-            h_t_final = h_t[-1]
-            h_b_final = h_b[-1]
+        if not self.args.bidirectional:
+            #if args.normalize:
+            h_t = normalize_3d(h_t)
+            h_b = normalize_3d(h_b)
+            
+            if self.args.average: # Average over sequence length, ignoring paddings
+                h_t_final = self.average_without_padding(h_t, titles) #h_t: num_ques * hidden_dim
+                h_b_final = self.average_without_padding(h_b, bodies) #h_b: num_ques * hidden_dim
+                #say("h_avg_title dtype: {}\n".format(ht.dtype))
+            else:  #last pooling 
+                h_t_final = self.last_without_padding(h_t, titles)
+                h_b_final = self.last_without_padding(h_b, bodies)
+                
+        else:
+            h_t_forward = h_t[:,:,0:self.hidden_dim]
+            h_t_backward = h_t[:,:,self.hidden_dim : self.hidden_dim * 2]
+            h_b_forward = h_b[:,:,0:self.hidden_dim]
+            h_b_backward = h_b[:,:,self.hidden_dim : self.hidden_dim * 2]
+                
+            #if args.normalize:
+            h_t_forward = normalize_3d(h_t_forward)
+            h_t_backward = normalize_3d(h_t_backward)
+            
+            h_b_forward = normalize_3d(h_b_forward)
+            h_b_backward = normalize_3d(h_b_backward)
+              
+            if self.args.average: # Average over sequence length, ignoring paddings
+                h_t_final = 0.5*(h_t_forward.mean(dim=0) + h_t_backward.mean(dim=0))
+                #h_t: num_ques * hidden_dim
+                h_b_final = 0.5*(h_b_forward.mean(dim=0) + h_b_backward.mean(dim=0))
+                #h_b: num_ques * hidden_dim 
+            else:  #last pooling 
+                h_t_final = 0.5*(h_t_forward[-1] + h_t_backward[-1])
+                h_b_final = 0.5*(h_b_forward[-1] + h_b_backward[-1])
+
         #Pool title and body hidden tensor together 
         h_final = (h_t_final+h_b_final)*0.5 # num_ques * hidden_dim
         #h_final = apply_dropout(h_final, dropout) ???
@@ -163,28 +188,27 @@ class LSTM(nn.Module):
         avg = (x*mask_variable).sum(dim=0)/(mask_variable.sum(dim=0)+eps)
         return avg
     
-#    def last_without_padding(self,x,ids):
-#        '''
-#        Last hidden output of a sequence ignoring padding 
-#        
-#        Input: 
-#            x: Variable that contains hidden layer output tensor; size = seq_len * num_ques * hidden_dim
-#            ids: actual titles or bodies word indices padded with 0 on the right(seq_len * num_ques) 
-#        Output: 
-#            last hidden output: num_ques * hidden_dim       
-#        '''
-#        seq_len, num_ques = ids.data.size()
-#        mask_tensor = torch.zeros(seq_len, num_ques,self.hidden_dim)
-#        #find seq last position
-#        last_ind = (ids.data<>0).sum(dim=0)-1 #1D tensor: index of the seq last position
-#        for i in range(num_ques):
-#            mask_tensor[last_ind[i],i,:]=1 #put 1 to the last position of the sequence in mask. 
-#        mask_variable = Variable(mask_tensor,requires_grad = True) #seq_len, num_ques, hidden_dim
-#        
-#        if self.args.cuda:
-#            mask_variable = mask_variable.cuda()
-#            
-#        return (x*mask_variable).sum(dim=0) ##num_ques by hidden_dim
+    def last_without_padding(self,x,ids):
+        '''
+        Last hidden output of a sequence ignoring padding 
+        
+        Input: 
+            x: Variable that contains hidden layer output tensor; size = seq_len * num_ques * hidden_dim
+            ids: actual titles or bodies word indices padded with 0 on the right(seq_len * num_ques) 
+        Output: 
+            last hidden output: num_ques * hidden_dim       
+        '''
+        seq_len, num_ques = ids.data.size()
+        mask_tensor = torch.zeros(seq_len, num_ques,self.hidden_dim)
+        #find seq last position
+        last_ind = ((ids.data<>0).float().sum(dim=0)-1.0).long() #1D tensor: index of the seq last position
+        for i in range(num_ques):
+            mask_tensor[last_ind[i],i,:]=1 #put 1 to the last position of the sequence in mask. 
+        mask_variable = Variable(mask_tensor,requires_grad = True) #seq_len, num_ques, hidden_dim
+        
+        if self.args.cuda:
+            mask_variable = mask_variable.cuda() 
+        return (x*mask_variable).sum(dim=0) ##num_ques by hidden_dim
 
     def evaluate(self, data):
         '''
@@ -202,7 +226,7 @@ class LSTM(nn.Module):
             titles,bodies,labels = batch
             h_final = self.forward(batch,False) #not training 
             scores = cosSim(h_final)
-            assert len(scores) == len(labels) #20
+            #assert len(scores) == len(labels) #20
             ranks = np.array((-scores.data).tolist()).argsort() #sort by score 
             ranked_labels = labels[ranks]
             res.append(ranked_labels.tolist()) ##a list of labels for the ranked retrievals
@@ -287,12 +311,13 @@ def normalize_3d(x,eps=1e-8):
         #make sure l2 dim = x dim = seq_len * num_ques * hidden_dim
         return x/(l2+eps)
 
+
 def normalize_2d(x, eps=1e-8):
     # x is batch*hidden_dim
     # l2 is batch*1
     l2 = x.norm(2,dim=1)  #l2: 1d tensor of dim = num_ques
     l2 = l2.view(len(l2),-1) #change l2's dimension to: num_ques * 1
-    return x/(l2+eps)  
+    return x/(l2+eps) 
 
 
 

@@ -17,14 +17,6 @@ class Evaluation():
                 precision_all.append(0.0)
         return sum(precision_all)/len(precision_all)
                 
-#	def Precision(self,precision_at):
-#		scores = []
-#		for item in self.data:
-#			temp = item[:precision_at]
-#			if any(val==1 for val in item):###WHY HAVE THIS? 
-#				scores.append(sum([1 if val==1 else 0 for val in temp])*1.0 / len(temp) if len(temp) > 0 else 0.0)
-#		return sum(scores)/len(scores) if len(scores) > 0 else 0.0
-    
     def MAP(self):
         '''
         Mean Average Precision (MAP)
@@ -71,19 +63,18 @@ class Evaluation():
                     if i==len(item)-1:#reach the end but not find relevant document
                         list_RR.append(0.0)  
         return sum(list_RR)/len(list_RR) if len(list_RR) > 0 else 0.0
-
               
 ##My testing code
-data1 = [[0,0,1]]
-#e=Evaluation(data)
-e1=Evaluation(data1)
-#print e.MAP()
-print e1.MAP()
-#print e.MRR()
-#print e1.Precision_at_R(2)
-
-#[0,1,1],[0,1,1,1,1],[0,1,1,1]
-
+#data1 = [[0,0,1]]
+##e=Evaluation(data)
+#e1=Evaluation(data1)
+##print e.MAP()
+#print e1.MAP()
+##print e.MRR()
+##print e1.Precision_at_R(2)
+#
+##[0,1,1],[0,1,1,1,1],[0,1,1,1]
+#
 
 
                        

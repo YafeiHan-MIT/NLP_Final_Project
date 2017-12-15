@@ -80,8 +80,7 @@ def run_epoch(ids_corpus, train, dev, test, model, optimizer, args):
     '''
     #set model to training mode 
     model.train() #set model to train mode 
-    train_batches = create_batches(ids_corpus, train, args.batch_size, padding_id=0, perm=None, pad_left=args.pad_left)
-    #N=3 ##for testing 
+    train_batches = create_batches(ids_corpus, train, args.batch_size, padding_id=0, perm=None, pad_left=args.pad_left) 
     N = len(train_batches)
     train_loss = 0.0
     train_cost = 0.0     

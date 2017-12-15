@@ -151,11 +151,16 @@ argparser.add_argument("--pad_left",
         default = False
     )
 
+argparser.add_argument("--bidirectional",
+        type = bool,
+        default = False
+    )
+
 args = argparser.parse_args()
 print args
 print ""
 
-torch.manual_seed(args.seed)
+#torch.manual_seed(args.seed)
 
 if not os.path.exists(args.save_model):
     os.makedirs(args.save_model)
@@ -186,7 +191,7 @@ if __name__ == '__main__':
     print "number of test queries:", len(test) ##186
     
     ##Load model 
-    model = get_model(embeddings, ids_corpus, args)
+    model = get_model(embeddings, args)
     print(model)
 
     if args.cuda:
