@@ -19,7 +19,7 @@ sys.path.append(dirname(dirname(realpath(__file__)))) ##add project path to syst
 os.chdir(dirname(dirname(realpath(__file__)))) #u'/Users/yafeihan/Dropbox (MIT)/Courses_MIT/6.864_NLP/NLP_Final_Project'
 
 from src.data_util import *
-from src.model_lstm_adda import get_model, Discriminator
+from src.model_adda import get_model, Discriminator
 from src.train_util_adda import train_source_model, train_target_model
 
 #Build a argument parser: argparser
@@ -179,8 +179,6 @@ if __name__ == '__main__':
     print '\nConvert raw corpus to word ids'
     src_corpus_ids = map_corpus(source_corpus, embeddings, word_to_indx, max_len=args.max_seq_len)
     tar_corpus_ids = map_corpus(target_corpus, embeddings, word_to_indx, max_len=args.max_seq_len)
-    args.src_corpus_ids = src_corpus_ids
-    args.tar_corpus_ids = tar_corpus_ids
 
     print "\nRead annotations from target domain (dev/test)"
     tar_dev = read_annotations_target('data/Android/dev.pos.txt',
@@ -206,19 +204,19 @@ if __name__ == '__main__':
 
     # train
     # optimizer = torch.optim.Adam(source_model.parameters(), lr=args.learning_rate, weight_decay=0)
-    # train_source_model(source_model, train, dev, test)
+    # train_source_model(src_corpus_ids, source_model, train, dev, test)
     source_model = torch.load(os.path.join(args.save_model, "src_model_best.pkl.gz"))
 
     # initialize target model with the weights of the source model
     target_model.load_state_dict(source_model.state_dict())
 
     input_size = source_model.hidden_dim
-    discriminator = Discriminator(input_size, input_size/2)
+    discriminator = Discriminator(input_size, input_size/4)
 
     if args.cuda:
         discriminator = discriminator.cuda()
 
-    optimizer_d = torch.optim.Adam(discriminator.parameters(), lr=args.learning_rate, weight_decay=0)
-    optimizer_m = torch.optim.Adam(target_model.parameters(), lr=args.learning_rate * 2, weight_decay=0)
-    train_target_model(args, source_model, target_model, discriminator, train, tar_dev, tar_test, optimizer_d,
-                       optimizer_m)
+    optimizer_d = torch.optim.Adam(discriminator.parameters(), lr=args.learning_rate * 0.01, weight_decay=0)
+    optimizer_m = torch.optim.Adam(target_model.parameters(), lr=args.learning_rate, weight_decay=0)
+    train_target_model(args, src_corpus_ids, tar_corpus_ids, source_model, target_model, discriminator, train, tar_dev,
+                       tar_test, optimizer_d, optimizer_m)

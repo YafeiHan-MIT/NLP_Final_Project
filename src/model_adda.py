@@ -33,7 +33,7 @@ class Model(nn.Module):
         super(Model, self).__init__()
         self.args = args
 
-    def evaluate_auc(self, data):
+    def evaluate_auc(self, data, tar_corpus_ids):
         '''
         Evaluate on target domain data  (dev/test)
         data:  target domain data  (dev/test)
@@ -43,7 +43,7 @@ class Model(nn.Module):
         pos_pairs, neg_pairs = data
         AUC = AUCMeter()
         # print 'build eval batche?s from tar_dev (pos pairs)'
-        pos_batches = create_eval_batches_target(self.args.tar_corpus_ids, pos_pairs, pairs_per_batch=1000,
+        pos_batches = create_eval_batches_target(tar_corpus_ids, pos_pairs, pairs_per_batch=1000,
                                                  padding_id=self.args.padding_id, pad_left=self.args.pad_left)
         # print 'size of pos_batches:', len(pos_batches)
         count = 1
@@ -64,7 +64,7 @@ class Model(nn.Module):
             AUC.add(np.array(pos_scores), pos_labels)
 
         # print 'build eval batches from tar_dev (neg pairs)'
-        neg_batches = create_eval_batches_target(self.args.tar_corpus_ids, neg_pairs, pairs_per_batch=1000,
+        neg_batches = create_eval_batches_target(tar_corpus_ids, neg_pairs, pairs_per_batch=1000,
                                                  padding_id=self.args.padding_id, pad_left=self.args.pad_left)
         # print 'size of neg_batches:', len(neg_batches)
 
@@ -210,6 +210,7 @@ class LSTM(Model):
                             hidden_size = self.hidden_dim, 
                             num_layers = self.hidden_layers, 
                             dropout=args.dropout)
+        self.lstm.flatten_parameters()
         self.activation = get_activation_by_name('tanh')  ##can choose other activation function specified in args 
         #self.crit = nn.MultiMarginLoss(p=1, margin=0.2, weight=None, size_average=True)
         
@@ -246,8 +247,8 @@ class LSTM(Model):
         titles, bodies = batch[0], batch[1]
         seq_len_t, num_ques= titles.shape
         seq_len_b, num_ques= bodies.shape
-        self.hcn_t = self.init_hidden(num_ques) #(h_0, c_0) for titles' initial hidden states
-        self.hcn_b = self.init_hidden(num_ques) #(h_0, c_0) for bodies' initial hidden states
+        hcn_t = self.init_hidden(num_ques) #(h_0, c_0) for titles' initial hidden states
+        hcn_b = self.init_hidden(num_ques) #(h_0, c_0) for bodies' initial hidden states
 
         titles = Variable(torch.from_numpy(titles).long(), requires_grad=False)
         bodies = Variable(torch.from_numpy(bodies).long(), requires_grad=False)
@@ -261,8 +262,8 @@ class LSTM(Model):
         embeds_bodies = self.embedding(bodies) #seq_len_body * num_ques * embed_dim
         
         ## lstm layer: word embedding (200) & h_(t-1) (hidden_dim) => h_t (hidden_dim)
-        h_t, self.hcn_t = self.lstm(embeds_titles, self.hcn_t)
-        h_b, self.hcn_b = self.lstm(embeds_bodies, self.hcn_b)
+        h_t, hcn_t = self.lstm(embeds_titles, hcn_t)
+        h_b, hcn_b = self.lstm(embeds_bodies, hcn_b)
         
         ## activation function 
         h_t = self.activation(h_t) #seq_len * num_ques * hidden_dim
@@ -271,9 +272,6 @@ class LSTM(Model):
         #if args.normalize:
         h_t = normalize_3d(h_t)
         h_b = normalize_3d(h_b)
-        
-        self.h_t = h_t #self.h_t: seq_len * num_ques * hidden_dim
-        self.h_b = h_b #self.h_b: seq_len * num_ques * hidden_dim
         
         if self.args.average: # Average over sequence length, ignoring paddings
             h_t_final = self.average_without_padding(h_t, titles) #h_t: num_ques * hidden_dim
@@ -286,7 +284,6 @@ class LSTM(Model):
         h_final = (h_t_final+h_b_final)*0.5 # num_ques * hidden_dim
         #h_final = apply_dropout(h_final, dropout) ???
         h_final = normalize_2d(h_final) ##normalize along hidden_dim, hidden representation of a question has norm = 1
-        self.h_final = h_final  #Tensor, num_ques * hidden_dim
         return h_final
         
     def average_without_padding(self, x, ids,eps=1e-8):
@@ -339,13 +336,11 @@ class Discriminator(nn.Module):
     def __init__(self, input_size, hidden_dim):
         super(Discriminator, self).__init__()
         self.linear1 = nn.Linear(input_size, hidden_dim)
-        self.linear2 = nn.Linear(hidden_dim, hidden_dim)
-        self.linear3 = nn.Linear(hidden_dim, 1)
+        self.linear2 = nn.Linear(hidden_dim, 1)
 
     def forward(self, input):
         h = F.relu(self.linear1(input))
-        h = F.relu(self.linear2(h))
-        return F.sigmoid(self.linear3(h))
+        return F.sigmoid(self.linear2(h))
 
 
 def max_margin_loss(args,h_final,batch,margin):

@@ -19,7 +19,7 @@ sys.path.append(dirname(dirname(realpath(__file__)))) ##add project path to syst
 os.chdir(dirname(dirname(realpath(__file__)))) #u'/Users/yafeihan/Dropbox (MIT)/Courses_MIT/6.864_NLP/NLP_Final_Project'
 
 from src.data_util import *
-from src.model_lstm import get_model
+from src.model import get_model
 from src.train_util import train_model
 
 #Build a argument parser: argparser
@@ -152,7 +152,7 @@ argparser.add_argument("--pad_left",
 
 argparser.add_argument("--bidirectional",
         type = bool,
-        default = False
+        default = True
     )
 
 args = argparser.parse_args()
@@ -178,7 +178,6 @@ if __name__ == '__main__':
 
     ##convert raw_corpus to ids_corpus
     ids_corpus = map_corpus(raw_corpus, embeddings, word_to_indx, max_len=100)
-    args.ids_corpus = ids_corpus
 
     ###read annotation data
     train = read_annotations(args.train, num_neg=20)
@@ -193,7 +192,7 @@ if __name__ == '__main__':
     # print "number of test queries:", len(test) ##186
     
     ##Load model 
-    model = get_model(embeddings, args)
+    model = get_model(embeddings, args, ids_corpus)
     print(model)
 
     if args.cuda:
