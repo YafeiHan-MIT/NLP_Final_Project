@@ -12,7 +12,7 @@ import torch.nn.functional as F
 from src.evaluation import Evaluation
 
 
-def get_model(embeddings, args):
+def get_model(embeddings, args, ids_corpus):
     '''
     Build a model - a subclass of nn.Module, e.g. lstm, DAN, RNN etc. 
     given fixed embedding and a model parameters specified by user in args.
@@ -21,9 +21,9 @@ def get_model(embeddings, args):
     '''
     print("\nBuilding model...")
     if args.model_name == 'lstm':
-        return LSTM(embeddings, args)
+        return LSTM(embeddings, args, ids_corpus)
     elif args.model_name == 'cnn':
-        return CNN(embeddings, args)
+        return CNN(embeddings, args, ids_corpus)
     else:
         raise Exception("Model name {} not supported!".format(args.model_name))
 
@@ -47,13 +47,13 @@ class Model(nn.Module):
         #each srouce query corresponds to one batch: (pid, [qid,...],[label,..]) 
         for batch in eval_batches:
             titles,bodies,labels = batch
-            h_final = self.forward(batch,False) #not training 
+            h_final = self.forward(batch) #not training
             scores = cosSim(h_final)
             #assert len(scores) == len(labels) #20
             ranks = np.array((-scores.data).tolist()).argsort() #sort by score 
             ranked_labels = labels[ranks]
             res.append(ranked_labels.tolist()) ##a list of labels for the ranked retrievals
-        e = src.evaluation.Evaluation(res)
+        e = Evaluation(res)
         MAP = e.MAP()*100
         MRR = e.MRR()*100
         P1 = e.Precision_at_R(1)*100
@@ -81,12 +81,13 @@ class Model(nn.Module):
 
 
 class CNN(Model):
-    def __init__(self, embeddings, args):
+    def __init__(self, embeddings, args, ids_corpus):
         super(CNN, self).__init__(args)
         print "CNN Model"
 
         args.vocab_size, args.embedding_dim = embeddings.shape
         self.args = args
+        self.ids_corpus = ids_corpus
 
         self.padding_idx = 0
         self.vocab_size, self.embedding_dim = embeddings.shape
@@ -133,7 +134,7 @@ class LSTM(Model):
     '''
     LSTM for learning similarity between questions 
     '''
-    def __init__(self, embeddings, args):
+    def __init__(self, embeddings, args, ids_corpus):
 
         '''
         embeddings: fixed embedding table (2-D array, dim=vocab_size * embedding_dim: 100407x200)
@@ -151,6 +152,7 @@ class LSTM(Model):
         self.batch_size = args.batch_size #number of source questions 
         self.vocab_size, self.embedding_dim = embeddings.shape
         self.args = args
+        self.ids_corpus = ids_corpus
         
         ##Define layers in the nnet
         self.embedding = nn.Embedding(self.vocab_size, self.embedding_dim, self.padding_idx)

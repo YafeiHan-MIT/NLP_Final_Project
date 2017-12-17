@@ -8,7 +8,7 @@ Created on Fri Nov 24 15:05:10 2017
 
 from prettytable import PrettyTable
 import time
-from src.model_lstm import *
+from src.model import *
 
 
 def train_model(ids_corpus, model, train, dev, test):

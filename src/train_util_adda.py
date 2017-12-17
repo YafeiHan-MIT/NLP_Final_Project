@@ -8,10 +8,10 @@ Created on Fri Nov 24 15:05:10 2017
 
 from prettytable import PrettyTable
 import time
-from src.model_lstm_adda import *
+from src.model_adda import *
 
 
-def train_source_model(model, train, dev, test):
+def train_source_model(src_corpus_ids, model, train, dev, test):
     '''
     Input: 
         train_data: 
@@ -33,7 +33,7 @@ def train_source_model(model, train, dev, test):
         unchanged += 1
         if unchanged > 15: break
         start_time = time.time()
-        train_loss, train_cost, dev_eva, test_eva = run_src_train_epoch(train, dev, test, model, optimizer, args)
+        train_loss, train_cost, dev_eva, test_eva = run_src_train_epoch(src_corpus_ids, train, dev, test, model, optimizer, args)
 
         dev_MRR = dev_eva[1]
         if dev_MRR > best_dev:
@@ -63,14 +63,14 @@ def train_source_model(model, train, dev, test):
     torch.save(model, os.path.join(args.save_model, "model_ep" + str(epoch) + "_best.pkl.gz"))
 
 
-def run_src_train_epoch(train, dev, test, model, optimizer, args):
+def run_src_train_epoch(src_corpus_ids, train, dev, test, model, optimizer, args):
     '''
     Run one epoch (one pass of data)
     Return average training loss, training cost, dev and test evaluations after this epoch. 
     '''
     # set model to training mode
     model.train()  # set model to train mode
-    train_batches = create_batches(args.src_corpus_ids, train, args.batch_size, padding_id=0, perm=None, pad_left=args.pad_left)
+    train_batches = create_batches(src_corpus_ids, train, args.batch_size, padding_id=0, perm=None, pad_left=args.pad_left)
     N = len(train_batches)
     train_loss = 0.0
     train_cost = 0.0
@@ -100,8 +100,8 @@ def run_src_train_epoch(train, dev, test, model, optimizer, args):
     return (train_loss / (i + 1))[0], (train_cost / (i + 1))[0], dev_eva, test_eva
 
 
-def train_target_model(args, source_model, target_model, discriminator, train, tar_dev, tar_test, optimizer_d,
-                       optimizer_m):
+def train_target_model(args, src_corpus_ids, tar_corpus_ids, source_model, target_model, discriminator, train, tar_dev,
+                       tar_test, optimizer_d, optimizer_m):
     result_table = PrettyTable(["Epoch", "dev_auc", "dev_auc(0.05)"] + ["tst_auc", "tst_auc(0.05)"])
 
     unchanged = 0
@@ -110,9 +110,10 @@ def train_target_model(args, source_model, target_model, discriminator, train, t
     max_epoch = args.max_epoch
     for epoch in xrange(max_epoch):
         unchanged += 1
-        if unchanged > 15: break
+        if unchanged > 25: break
         start_time = time.time()
-        train_loss_m, train_loss_d, dev_eva, test_eva = run_tar_train_epoch(args, source_model, target_model,
+        train_loss_m, train_loss_d, dev_eva, test_eva = run_tar_train_epoch(args, src_corpus_ids, tar_corpus_ids,
+                                                                            source_model, target_model,
                                                                             discriminator, train, tar_dev, tar_test,
                                                                             optimizer_d, optimizer_m)
         dev_auc, dev_auc005 = dev_eva
@@ -136,24 +137,21 @@ def train_target_model(args, source_model, target_model, discriminator, train, t
             say("\n")
 
 
-def run_tar_train_epoch(args, source_model, target_model, discriminator, train, tar_dev, tar_test, optimizer_d,
-                        optimizer_m):
+def run_tar_train_epoch(args, src_corpus_ids, tar_corpus_ids, source_model, target_model, discriminator, train, tar_dev,
+                        tar_test, optimizer_d, optimizer_m):
     # set model to train mode
     discriminator.train()
     target_model.train()
 
     # create batch from source corpus
-    src_batches = create_batches(args.src_corpus_ids, train, args.batch_size,
+    src_batches = create_batches(src_corpus_ids, train, args.batch_size,
                                  padding_id=args.padding_id, perm=None, pad_left=args.pad_left)
-    # create batch from target (same number as src_batches)
-    tar_batches = create_batches_target(src_batches, args.tar_corpus_ids, padding_id=args.padding_id,
+    # create batch from target (same number as src_batches), for training D
+    tar_batches_d = create_batches_target(src_batches, tar_corpus_ids, padding_id=args.padding_id,
                                         pad_left=args.pad_left)
-
-    # create multiple tar_batches for training M
-    tar_batches_m = [tar_batches]
-    for i in range(3):
-        tar_batches_m.append(create_batches_target(src_batches, args.tar_corpus_ids, padding_id=args.padding_id,
-                                        pad_left=args.pad_left))
+    # for training M
+    tar_batches_m = create_batches_target(src_batches, tar_corpus_ids, padding_id=args.padding_id,
+                                          pad_left=args.pad_left)
 
     N = len(src_batches)
     train_loss_m = 0.0
@@ -164,13 +162,13 @@ def run_tar_train_epoch(args, source_model, target_model, discriminator, train, 
 
         # get representation from source and target models
         src_h_final = source_model(src_batches[i])
-        tar_h_final = target_model(tar_batches[i])
-
+        tar_h_final = target_model(tar_batches_d[i])
         num_ques = src_titles.shape[1]
 
         optimizer_d.zero_grad() 
         
         # train D on source
+        optimizer_d.zero_grad()
         src_pred = discriminator(src_h_final)
         src_pred = src_pred.view(src_pred.size(0))
         expected_ones = Variable(torch.ones(num_ques))
@@ -190,20 +188,21 @@ def run_tar_train_epoch(args, source_model, target_model, discriminator, train, 
         tar_loss_d = F.binary_cross_entropy(tar_pred, expected_zeros)
         tar_loss_d.backward()
         optimizer_d.step()
-        
-        optimizer_m.zero_grad() 
-        # see how well M fooled the discriminator
-        for batch in tar_batches_m:
-            optimizer_m.zero_grad()
-            tar_h_final = target_model(batch[i])
-            tar_pred = discriminator(tar_h_final)
-            tar_pred = tar_pred.view(tar_pred.size(0))
-            loss_m = F.binary_cross_entropy(tar_pred, expected_ones)
-            loss_m.backward()
-            optimizer_m.step()
 
-            train_loss_m += loss_m.data
+        # train M to fool D
+        optimizer_m.zero_grad()
+        tar_h_final = target_model(tar_batches_m[i])
+        tar_pred = discriminator(tar_h_final)
+        tar_pred = tar_pred.view(tar_pred.size(0))
 
+        expected_ones = Variable(torch.ones(tar_pred.size()))
+        if args.cuda:
+            expected_ones = expected_ones.cuda()
+        loss_m = F.binary_cross_entropy(tar_pred, expected_ones)
+        loss_m.backward()
+        optimizer_m.step()
+
+        train_loss_m += loss_m.data
         train_loss_d += src_loss_d.data + tar_loss_d.data
 
         if i % 10 == 0:
@@ -213,9 +212,9 @@ def run_tar_train_epoch(args, source_model, target_model, discriminator, train, 
         test_eva = None
         if i == N - 1:  # last batch of this epoch
             if tar_dev is not None:
-                dev_eva = target_model.evaluate_auc(tar_dev)
+                dev_eva = target_model.evaluate_auc(tar_dev, tar_corpus_ids)
             if tar_test is not None:
-                test_eva = target_model.evaluate_auc(tar_test)
+                test_eva = target_model.evaluate_auc(tar_test, tar_corpus_ids)
 
             print "\n"
             print "loss_m: ", (train_loss_m / (i + 1))[0]

@@ -8,7 +8,7 @@ Created on Fri Nov 24 15:05:10 2017
 import time
 from prettytable import PrettyTable
 
-from src.model_lstm_ADA_GRL import *
+from src.model_ADA_GRL import *
 from src.meter import *
 
 
