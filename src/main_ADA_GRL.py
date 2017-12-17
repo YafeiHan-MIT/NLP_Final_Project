@@ -145,9 +145,15 @@ argparser.add_argument("--pad_left",
                        )
 
 argparser.add_argument("--lambd",
+<<<<<<< Updated upstream
                        type=float,
                        default=0.7
                        )
+=======
+        type = float,
+        default = 0.2
+    )
+>>>>>>> Stashed changes
 
 argparser.add_argument("--hidden_dim_dc",
                        type=float,

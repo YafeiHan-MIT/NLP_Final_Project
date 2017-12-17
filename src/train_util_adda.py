@@ -160,9 +160,6 @@ def run_tar_train_epoch(args, source_model, target_model, discriminator, train, 
     train_loss_d = 0.0
 
     for i in xrange(N):
-
-        optimizer_d.zero_grad()
-
         src_titles, src_bodies, triples = src_batches[i]
 
         # get representation from source and target models
@@ -171,6 +168,8 @@ def run_tar_train_epoch(args, source_model, target_model, discriminator, train, 
 
         num_ques = src_titles.shape[1]
 
+        optimizer_d.zero_grad() 
+        
         # train D on source
         src_pred = discriminator(src_h_final)
         src_pred = src_pred.view(src_pred.size(0))
@@ -191,7 +190,8 @@ def run_tar_train_epoch(args, source_model, target_model, discriminator, train, 
         tar_loss_d = F.binary_cross_entropy(tar_pred, expected_zeros)
         tar_loss_d.backward()
         optimizer_d.step()
-
+        
+        optimizer_m.zero_grad() 
         # see how well M fooled the discriminator
         for batch in tar_batches_m:
             optimizer_m.zero_grad()
